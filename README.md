@@ -1,4 +1,4 @@
-# YASB Theme Selector
+# YASB Theme Manager
 
 ⚠️ **Disclaimer — Manual Theme Installation Required**
 
