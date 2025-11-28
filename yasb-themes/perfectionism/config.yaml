@@ -577,16 +577,14 @@ widgets:
     type: "yasb.custom.CustomWidget"
     options:
       label: "\ue7fe"  # some icon for theme
-      label_alt: "Switch Theme"
+      label_alt: "Theme Manager"
       class_name: "theme-switcher-widget"
       exec_options:
-        run_cmd: 'powershell -ExecutionPolicy Bypass -File "${env:YASB_THEME_MANAGER}/theme.ps1" --cycle'
-        run_interval: 0        # only run on demand
         hide_empty: false
       callbacks:
         on_left: 'exec powershell -ExecutionPolicy Bypass -File "${env:YASB_THEME_MANAGER}/theme.ps1" --cycle'
         on_middle: "toggle_label"
-        on_right: 'exec npm.cmd --prefix "${env:YASB_THEME_MANAGER}/selector-app" start'
+        on_right: 'exec powershell npm --prefix "${env:YASB_THEME_MANAGER}/selector-app" start'
 
 
   # Grouped Widgets
