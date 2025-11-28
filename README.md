@@ -1,6 +1,6 @@
 # YASB Theme Selector
 
-**Neon / Pastel theme manager for YASB**
+**theme manager for YASB**
 A small theme-selector system for YASB (Yet Another Shell Bar) with a PowerShell script, an Electron selector UI, and theme definitions you can apply to change YASB’s `style.css` root variables and optionally trigger Wallpaper Engine.
 
 Repository: [https://github.com/The-Ico2/yasb-theme](https://github.com/The-Ico2/yasb-theme)
