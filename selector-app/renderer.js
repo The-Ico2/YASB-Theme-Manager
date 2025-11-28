@@ -299,14 +299,6 @@ function applyTheme(themeName) {
         console.log('applyTheme: needs_workshop in result (should be handled by event listener)');
         return;
       }
-
-      if (result && result.ok) {
-        showStatusToast('Theme applied successfully');
-      } else if (typeof result === 'string') {
-        showStatusToast('Theme applied');
-      } else if (result) {
-        showStatusToast('Theme applied');
-      }
     })
     .catch(err => {
       console.error('applyTheme error:', err);
@@ -371,14 +363,19 @@ if (window.themeEvents && typeof window.themeEvents.onThemeStatus === 'function'
 }
 
 // Listen for explicit handshake JSON forwarded from main (ensures renderer sees needs_workshop immediately)
+console.log('RENDERER: Setting up onHandshake listener...');
+console.log('RENDERER: window.themeEvents =', window.themeEvents);
+console.log('RENDERER: typeof window.themeEvents.onHandshake =', typeof window.themeEvents?.onHandshake);
+
 if (window.themeEvents && typeof window.themeEvents.onHandshake === 'function') {
-  console.log('RENDERER: Registering onHandshake listener');
+  console.log('RENDERER: Registering onHandshake listener - READY');
   window.themeEvents.onHandshake((data) => {
     try {
-      console.log('RENDERER: onHandshake callback fired with data:', data);
+      console.log('RENDERER: *** onHandshake callback FIRED with data:', data);
       console.debug('theme-handshake', data);
-      try { showDebugBanner && showDebugBanner(`handshake: ${JSON.stringify(data)}`); } catch(e){}
+      try { showDebugBanner(`handshake: ${JSON.stringify(data)}`); } catch(e){}
       if (data && data.needs_workshop) {
+        console.log('RENDERER: Creating workshop prompt overlay...');
         // show the same non-blocking in-UI prompt used by applyTheme
         const existing = document.getElementById('workshop-prompt');
         if (existing) existing.remove();
@@ -397,37 +394,102 @@ if (window.themeEvents && typeof window.themeEvents.onHandshake === 'function') 
         panel.style.margin = '12px';
         panel.style.background = 'linear-gradient(180deg, rgba(16,16,24,0.95), rgba(8,8,12,0.95))';
         panel.style.color = '#fff';
-        panel.style.padding = '12px 16px';
-        panel.style.borderRadius = '8px';
+        panel.style.padding = '16px 20px';
+        panel.style.borderRadius = '12px';
         panel.style.boxShadow = '0 8px 24px rgba(0,0,0,0.6)';
+        panel.style.maxWidth = '500px';
+        
+        const title = document.createElement('div');
+        title.style.fontSize = '18px';
+        title.style.fontWeight = 'bold';
+        title.style.marginBottom = '12px';
+        title.textContent = 'Wallpaper Not Found';
+        
         const msg = document.createElement('div');
-        msg.textContent = 'This sub-theme requires a Wallpaper Engine workshop item which is not installed.';
+        msg.style.marginBottom = '16px';
+        msg.style.lineHeight = '1.5';
+        msg.innerHTML = `This sub-theme requires a Wallpaper Engine wallpaper that is not installed.<br><br><strong>What would you like to do?</strong>`;
+        
         const btnRow = document.createElement('div');
-        btnRow.style.marginTop = '8px';
         btnRow.style.display = 'flex';
-        btnRow.style.gap = '8px';
+        btnRow.style.gap = '10px';
+        btnRow.style.flexWrap = 'wrap';
+        
         const openBtn = document.createElement('button');
-        openBtn.textContent = 'Open Steam';
+        openBtn.textContent = 'Open Steam Workshop';
         openBtn.className = 'subtheme-apply-btn';
-        const declineBtn = document.createElement('button');
-        declineBtn.textContent = 'Decline';
-        declineBtn.className = 'subtheme-apply-btn';
-        declineBtn.style.background = 'linear-gradient(180deg,#555,#333)';
-        btnRow.appendChild(openBtn);
-        btnRow.appendChild(declineBtn);
-        panel.appendChild(msg);
-        panel.appendChild(btnRow);
-        overlay.appendChild(panel);
-        document.body.appendChild(overlay);
-        console.log('RENDERER: Overlay created and added to DOM');
-
         openBtn.addEventListener('click', async () => {
-          try { await window.themeAPI.openExternal(data.steam_url || data.steamUrl || data.link); } catch (e) { console.warn('openExternal failed', e); }
-          const watch = await window.themeAPI.watchWorkshop(data.workshop_id || data.workshopId, data.theme, data.sub || '');
+          const steamUrl = data.steam_url || data.steamUrl || data.link;
+          const workshopId = data.workshop_id || data.workshopId;
+          const themeCommand = data.theme_select_command || `${data.theme}/${data.sub || ''}`;
+          
+          console.log('Opening Steam Workshop URL:', steamUrl);
+          try { 
+            await window.themeAPI.openExternal(steamUrl); 
+            console.log('Steam URL opened successfully');
+          } catch (e) { 
+            console.error('openExternal failed', e); 
+            alert('Failed to open Steam: ' + e);
+          }
+          
+          overlay.remove();
+          showWaitingOverlay(`Waiting for workshop item ${workshopId} to download...\nClick to cancel`);
+          
+          // Add click handler to cancel waiting
+          const waitOverlay = document.getElementById('waiting-overlay');
+          if (waitOverlay) {
+            waitOverlay.style.cursor = 'pointer';
+            const cancelHandler = () => {
+              hideWaitingOverlay();
+              waitOverlay.removeEventListener('click', cancelHandler);
+            };
+            waitOverlay.addEventListener('click', cancelHandler);
+          }
+          
+          const watch = await window.themeAPI.watchWorkshop(workshopId, data.theme, data.sub || '');
           if (watch && watch.id) {
-            showWaitingOverlay(`Waiting for workshop item ${data.workshop_id || data.workshopId} to appear...`);
+            console.log(`Started watching for workshop item ${workshopId}`);
+          }
+        });
+
+        disableBtn.addEventListener('click', async () => {
+          try {
+            const result = await window.themeAPI.disableSubWallpaper(data.theme, data.sub || '');
+            if (result && result.ok) {
+              showStatusToast('Wallpaper disabled for this sub-theme');
+            } else {
+              showStatusToast('Failed to disable wallpaper');
+            }
+          } catch (e) {
+            console.error('disableSubWallpaper failed', e);
+            showStatusToast('Failed to disable wallpaper');
           }
           overlay.remove();
+        });
+        
+        changeBtn.addEventListener('click', async () => {
+          overlay.remove();
+          showStatusToast('Custom wallpaper selection - Coming soon!');
+          // TODO: Implement custom wallpaper selection
+          // This would open a file picker to select a local wallpaper or enter a workshop ID
+        });verlay.remove();
+          showWaitingOverlay(`Waiting for workshop item ${workshopId} to download...\nClick to cancel`);
+          
+          // Add click handler to cancel waiting
+          const waitOverlay = document.getElementById('waiting-overlay');
+          if (waitOverlay) {
+            waitOverlay.style.cursor = 'pointer';
+            const cancelHandler = () => {
+              hideWaitingOverlay();
+              waitOverlay.removeEventListener('click', cancelHandler);
+            };
+            waitOverlay.addEventListener('click', cancelHandler);
+          }
+          
+          const watch = await window.themeAPI.watchWorkshop(workshopId, data.theme, data.sub || '');
+          if (watch && watch.id) {
+            console.log(`Started watching for workshop item ${workshopId}`);
+          }
         });
 
         declineBtn.addEventListener('click', async () => {

@@ -20,6 +20,37 @@ function createWindow() {
   // Hide the menu bar on Windows/Linux so Alt won't reveal the menu unexpectedly
   // try { win.setMenuBarVisibility(true); win.setAutoHideMenuBar(false); } catch (e) {}
   win.loadFile('index.html');
+  
+  // Poll for workshop-prompt.json file every 2 seconds
+  const checkWorkshopPrompt = () => {
+    const promptFile = path.join(__dirname, '..', 'workshop-prompt.json');
+    if (fs.existsSync(promptFile)) {
+      try {
+        const promptData = fs.readFileSync(promptFile, 'utf8');
+        const workshopData = JSON.parse(promptData);
+        console.log('main: Found workshop prompt file with data:', workshopData);
+        
+        // Delete the file so it's only processed once
+        fs.unlinkSync(promptFile);
+        console.log('main: Deleted workshop prompt file');
+        
+        // Send to renderer
+        console.log('main: Sending theme-handshake event to renderer');
+        win.webContents.send('theme-handshake', workshopData);
+        
+        // Focus the window
+        if (win.isMinimized()) win.restore();
+        win.focus();
+      } catch (e) {
+        console.error('main: Failed to process workshop prompt file:', e);
+        try { fs.unlinkSync(promptFile); } catch {}
+      }
+    }
+  };
+  
+  // Check on load and then poll every 2 seconds
+  setInterval(checkWorkshopPrompt, 2000);
+  
   // After the page loads, send current settings so renderer can open settings UI if needed
   win.webContents.once('did-finish-load', () => {
     try {
@@ -30,8 +61,12 @@ function createWindow() {
       if (!okExe || !okWorkshop) {
         win.webContents.send('settings-missing', { okExe: !!okExe, okWorkshop: !!okWorkshop, settings });
       }
+      
+      // Check for workshop prompt file immediately on load
+      checkWorkshopPrompt();
     } catch (e) { console.warn('settings check failed', e); }
   });
+  return win;
 }
 
 app.whenReady().then(createWindow);
@@ -307,7 +342,11 @@ ipcMain.handle('watch-workshop', (event, workshopId, theme, sub) => {
           }
         });
         c.stderr.on('data', () => {});
-        c.on('close', () => {});
+        c.on('close', (code) => {
+          if (code === 0) {
+            webContents.send('theme-status', { theme, sub, line: 'theme:wallpaper: OK' });
+          }
+        });
       } catch (e) { /* ignore */ }
     }
   }, 2000);

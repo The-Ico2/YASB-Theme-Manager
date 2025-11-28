@@ -277,10 +277,68 @@ function Set-StatusTheme($themeName, $subName) {
           }
           else {
             # emit handshake JSON to GUI so it can prompt and redirect
-            $out = @{ needs_workshop = $true; theme = $themeName; sub = $subName; workshop_id = $workshopId; steam_url = "steam://url/CommunityFilePage/$workshopId" }
+            $out = @{ 
+              needs_workshop = $true
+              theme = $themeName
+              sub = $subName
+              workshop_id = $workshopId
+              steam_url = "steam://url/CommunityFilePage/$workshopId"
+              steamUrl = "steam://url/CommunityFilePage/$workshopId"
+              link = $manifest."wallpaper-engine".link
+              theme_select_command = "$themeName/$subName"
+            }
             $json = $out | ConvertTo-Json -Compress -Depth 6
             Write-Output $json
-            # Don't exit - continue to apply the theme (just skip wallpaper)
+            
+            # If running from terminal (not GUI), notify existing Electron app or launch it
+            if (-not $env:ELECTRON_RUN_AS_NODE) {
+              Write-Host "`n[!] Workshop item $workshopId is not installed." -ForegroundColor Yellow
+              
+              # Write workshop data to a file for Electron to read
+              $promptFile = Join-Path $root "workshop-prompt.json"
+              $json | Out-File -FilePath $promptFile -Encoding UTF8 -Force
+              
+              # Check if Electron app is already running by looking for the process
+              $electronProcs = Get-Process electron -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowTitle -like "*theme*" -or $_.MainWindowTitle -eq "Default Enhanced" }
+              
+              if ($electronProcs) {
+                Write-Host "    Theme selector is already running. Showing workshop prompt..." -ForegroundColor Cyan
+                # The running Electron instance will detect the file via polling or manual refresh
+              } else {
+                Write-Host "    Launching theme selector to download wallpaper..." -ForegroundColor Cyan
+                
+                # Launch Electron app hidden (no new window flash)
+                $selectorPath = Join-Path $root "selector-app"
+                $electronExe = Join-Path $selectorPath "node_modules\electron\dist\electron.exe"
+                
+                if (-not (Test-Path $electronExe)) {
+                  $electronExe = Join-Path $selectorPath "node_modules\.bin\electron.cmd"
+                }
+                
+                if (Test-Path $electronExe) {
+                  $mainJs = Join-Path $selectorPath "main.js"
+                  
+                  try {
+                    # Use WindowStyle Hidden to prevent CMD window
+                    $psi = New-Object System.Diagnostics.ProcessStartInfo
+                    $psi.FileName = $electronExe
+                    $psi.Arguments = "`"$mainJs`""
+                    $psi.WorkingDirectory = $selectorPath
+                    $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+                    $psi.CreateNoWindow = $true
+                    [System.Diagnostics.Process]::Start($psi) | Out-Null
+                    
+                    Write-Host "    Theme selector opened. Please follow the prompt." -ForegroundColor Green
+                  } catch {
+                    Write-Warning "Failed to launch theme selector: $_"
+                    if (Test-Path $promptFile) { Remove-Item $promptFile -Force }
+                  }
+                } else {
+                  if (Test-Path $promptFile) { Remove-Item $promptFile -Force }
+                  Write-Warning "Electron not found in $selectorPath"
+                }
+              }
+            }
           }
         }
         else {
@@ -311,8 +369,9 @@ function Set-StatusTheme($themeName, $subName) {
             }
           }
         }
-        else {
-          # legacy behavior: manifest provided a local file path
+      }
+      else {
+        # legacy behavior: manifest provided a local file path
           # Resolve $subTheme placeholder if present (manifest may use "$subTheme/..." shorthand)
           $subDir = Join-Path $themeDir "sub-themes\$subName"
           if ($wallpath -like '*$subTheme*') {
@@ -342,12 +401,11 @@ function Set-StatusTheme($themeName, $subName) {
           }
         }
       }
-    }
 
     # Theme applied successfully
     Write-Output "theme:applied: $themeName/$subName"
-    return
-
+  }
+  else {
     # No sub-theme: simply copy base style file if present
     if ($baseStylePath -and (Test-Path $baseStylePath)) {
       $tmp = "$targetStyle.tmp.$PID"
@@ -367,8 +425,8 @@ function Set-StatusTheme($themeName, $subName) {
     if (Test-Path $stateSubFile) { Remove-Item $stateSubFile -Force -ErrorAction SilentlyContinue }
     Write-Output "theme:applied: $themeName"
   }
-
 }
+
 # Now apply according to chosenTheme / chosenSub
 
 # If the chosen theme has sub-themes and none was provided, emit a JSON payload
