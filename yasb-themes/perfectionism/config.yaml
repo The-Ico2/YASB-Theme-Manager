@@ -118,6 +118,7 @@ widgets:
         color: "black"
         radius: 3
         offset: [ 1, 1 ]
+  
   systray:
     type: "yasb.systray.SystrayWidget"
     options:
@@ -133,6 +134,7 @@ widgets:
       show_volume: false
       show_network: false
       tooltip: true
+  
   home:
     type: "yasb.home.HomeWidget"
     options:
@@ -151,6 +153,7 @@ widgets:
         left: 6
         bottom: 0
         right: 4
+  
   clock:
     type: "yasb.clock.ClockWidget"
     options:
@@ -167,6 +170,7 @@ widgets:
       callbacks:
         on_left: "toggle_calendar"
         on_middle: "toggle_label"
+  
   komorebi_workspaces:
     type: "komorebi.workspaces.WorkspaceWidget"
     options:
@@ -201,6 +205,7 @@ widgets:
         left: 0
         bottom: 0
         right: 6
+  
   apps:
     type: "yasb.applications.ApplicationsWidget"
     options:
@@ -226,6 +231,7 @@ widgets:
         left: 4
         bottom: 0
         right: 4
+  
   notifications:
     type: "yasb.notifications.NotificationsWidget"
     options:
@@ -242,6 +248,7 @@ widgets:
         left: 4
         bottom: 0
         right: 4
+  
   active_window:
     type: "yasb.active_window.ActiveWindowWidget"
     options:
@@ -310,6 +317,7 @@ widgets:
         next_track: "\ue893"
         mute: "\ue994"
         unmute: "\ue74f"
+  
   volume:
     type: "yasb.volume.VolumeWidget"
     options:
@@ -343,6 +351,7 @@ widgets:
         left: 2
         bottom: 0
         right: 2
+  
   microphone:
     type: "yasb.microphone.MicrophoneWidget"
     options:
@@ -404,6 +413,7 @@ widgets:
         on_right: "exec cmd.exe /c start ms-settings:batterysaver-settings"
         on_middle: "toggle_label"
         on_left: "do_nothing"
+  
   gpu:
     type: "yasb.gpu.GpuWidget"
     options:
@@ -422,6 +432,7 @@ widgets:
           background_color: "#242739" 
       callbacks:
         on_middle: "toggle_label"
+  
   cpu:
       type: "yasb.cpu.CpuWidget"
       options:
@@ -437,6 +448,7 @@ widgets:
         update_interval: 2000
         callbacks:
           on_middle: "toggle_label"
+  
   memory:
       type: "yasb.memory.MemoryWidget"
       options:
@@ -455,6 +467,7 @@ widgets:
           low: 25
           medium: 50
           high: 90
+  
   disk:
     type: "yasb.disk.DiskWidget"
     options:
@@ -508,6 +521,7 @@ widgets:
       bar_type: "bars"
       framerate: 120
       hide_empty: true
+  
   bin:
     type: "yasb.recycle_bin.RecycleBinWidget"
     options:
@@ -525,6 +539,7 @@ widgets:
         color: "black"
         radius: 3
         offset: [ 1, 1 ]
+
   wifi:
     type: "yasb.wifi.WifiWidget"
     options:
@@ -586,7 +601,6 @@ widgets:
         on_middle: "toggle_label"
         on_right: 'exec powershell npm --prefix "${env:YASB_THEME_MANAGER}/selector-app" start'
 
-
   # Grouped Widgets
   sysinfo:
       type: "yasb.grouper.GrouperWidget"
@@ -603,6 +617,7 @@ widgets:
           left: 2
           bottom: 0
           right: 6
+  
   audio:
     type: "yasb.grouper.GrouperWidget"
     options:
