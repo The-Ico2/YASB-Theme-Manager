@@ -30,17 +30,16 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 
 $root = $scriptDir
 
-$themeJsonPath = Join-Path $root "themes.json"
+# $themeJsonPath = Join-Path $root "themes.json"
 # New structure: status bar themes live in `yasb-themes`.
 $yasbThemesRoot = Join-Path $root "yasb-themes"
 $stateFile     = Join-Path $root "theme.current_status"
 $stateSubFile  = Join-Path $root "subtheme.current_status"
 # Backwards-compat: legacy themes folder
-$legacyThemesFolder = Join-Path $root "themes"
+# $legacyThemesFolder = Join-Path $root "themes"
 
 # Adjust path to YASB stylesheet - update if your layout differs
-# YASB in this workspace uses `styles.css` (plural). Write to that file.
-$yasbCssPath = Join-Path $env:USERPROFILE ".config\yasb\styles.css"
+# $yasbCssPath = Join-Path $env:USERPROFILE ".config\yasb\styles.css"
 
 # Path to Wallpaper Engine executable — adjust if installed elsewhere
 $wpeExe = "C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\wallpaper64.exe"
@@ -73,7 +72,7 @@ if ($list) {
 # Determine current/available status themes and sub-themes
 $statusThemes = Get-StatusThemes
 
-function Choose-Next-SubTheme {
+function Get-NextSubTheme {
   # cycle sub-themes for the currently selected status theme
   $currentTheme = ""
   if (Test-Path $stateFile) { $currentTheme = (Get-Content $stateFile -Raw).Trim() }
@@ -93,18 +92,18 @@ function Choose-Next-SubTheme {
   return @{ theme = $currentTheme; sub = $subs[$idx] }
 }
 
-function Parse-SelectArg($arg) {
+function Convert-ThemeSelection($arg) {
   # Accept formats: 'theme' or 'theme:sub' or 'theme/sub'
   if ($arg -match '(.+)[/:](.+)') { return @{ theme = $Matches[1]; sub = $Matches[2] } }
   return @{ theme = $arg; sub = $null }
 }
 
 if ($cycle) {
-  $choice = Choose-Next-SubTheme
+  $choice = Get-NextSubTheme
   $chosenTheme = $choice.theme
   $chosenSub = $choice.sub
 } else {
-  $p = Parse-SelectArg $select
+  $p = Convert-ThemeSelection $select
   $chosenTheme = $p.theme
   $chosenSub = $p.sub
   if (-not ($statusThemes -contains $chosenTheme)) {
@@ -115,7 +114,7 @@ if ($cycle) {
 
 
 # Apply status theme (copy config and write styles, optionally merging sub-theme variables)
-function Apply-StatusTheme($themeName, $subName) {
+function Set-StatusTheme($themeName, $subName) {
   $themeDir = Join-Path $yasbThemesRoot $themeName
   if (-not (Test-Path $themeDir)) { Write-Error "Theme folder missing: $themeDir"; exit 1 }
 
@@ -236,6 +235,6 @@ if ((-not $chosenSub -or $chosenSub -eq '') -and $availableSubs.Count -gt 0) {
   exit 0
 }
 
-Apply-StatusTheme -themeName $chosenTheme -subName $chosenSub
+Set-StatusTheme -themeName $chosenTheme -subName $chosenSub
 
 exit 0
