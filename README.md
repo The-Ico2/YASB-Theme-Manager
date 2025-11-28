@@ -269,5 +269,3 @@ npm --prefix "C:\Users\<username>\.config\theme\selector-app" start
 
 - Add themes manually via `yasb-themes/`
 - PRs welcome for UI improvements, scripts, or new themes.
-- GitHub remote fetching is planned for future releases.
-- 
