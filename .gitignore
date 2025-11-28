@@ -1,7 +1,8 @@
 # Node modules
 node_modules/
 selector-app/node_modules/
-
+.current_status_subtheme
+.current_status_theme
 # Logs
 npm-debug.log*
 yarn-debug.log*
