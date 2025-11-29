@@ -40,7 +40,7 @@
     "--btn-active": "rgba(224, 170, 255, 0.20)"
   },
   "wallpaper-engine": {
-    "enabled": false,
+    "enabled": true,
     "file": "$subTheme/wallpaper/project.json",
     "link": "https://steamcommunity.com/sharedfiles/filedetails/?id=3589454154"
   }

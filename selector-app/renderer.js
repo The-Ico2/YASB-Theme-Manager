@@ -677,12 +677,750 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     
     // Load editor content when switching to editor tab
     if (tabName === 'editor') {
-      loadEditorContent();
+      initEditor();
     }
   });
 });
 
 // ===== EDITOR TAB FUNCTIONALITY =====
+let editorState = {
+  themes: null,
+  selectedTheme: null,
+  selectedSub: null,
+  config: null,
+  manifest: null,
+  unsavedChanges: false
+};
+
+async function initEditor() {
+  try {
+    const loaded = await window.themeAPIAsync.getThemes();
+    if (!loaded || loaded.error) {
+      showToast('Error loading themes for editor', 'error');
+      return;
+    }
+    
+    editorState.themes = loaded;
+    renderThemeList();
+  } catch (e) {
+    console.error('Error initializing editor:', e);
+    showToast('Failed to initialize editor', 'error');
+  }
+}
+
+function renderThemeList() {
+  const themeList = document.getElementById('theme-list');
+  if (!themeList) return;
+  
+  const themeNames = Object.keys(editorState.themes);
+  let html = '';
+  
+  for (const themeName of themeNames) {
+    const theme = editorState.themes[themeName];
+    if (!theme.subs || theme.subs.length === 0) continue;
+    
+    const isSelected = editorState.selectedTheme === themeName;
+    const subCount = theme.subs.length;
+    
+    html += `
+      <div class="theme-list-item ${isSelected ? 'selected' : ''}" onclick="selectTheme('${themeName}')">
+        <div class="theme-list-name">${theme.meta?.name || themeName}</div>
+        <div class="theme-list-subs">${subCount} sub-theme${subCount !== 1 ? 's' : ''}</div>
+      </div>
+    `;
+  }
+  
+  if (!html) {
+    html = '<p style="color: #9aa0c0; font-size: 12px; text-align: center;">No themes found</p>';
+  }
+  
+  themeList.innerHTML = html;
+}
+
+window.selectTheme = async function(themeName) {
+  editorState.selectedTheme = themeName;
+  editorState.selectedSub = null;
+  
+  renderThemeList();
+  
+  const theme = editorState.themes[themeName];
+  if (!theme || !theme.subs || theme.subs.length === 0) {
+    renderEditorEmpty();
+    return;
+  }
+  
+  // Select first sub-theme by default
+  editorState.selectedSub = theme.subs[0].name;
+  
+  // Load config.yaml
+  try {
+    const configResult = await window.themeAPI.readThemeFile(themeName, 'config.yaml');
+    if (configResult && !configResult.error) {
+      editorState.config = configResult.content;
+    }
+  } catch (e) {
+    console.error('Error loading config:', e);
+  }
+  
+  renderEditor();
+};
+
+window.selectSubTheme = function(subName) {
+  editorState.selectedSub = subName;
+  renderEditor();
+};
+
+function renderEditorEmpty() {
+  const editorMain = document.getElementById('editor-main');
+  if (!editorMain) return;
+  
+  editorMain.innerHTML = `
+    <div class="editor-empty">
+      Select a theme from the sidebar to begin editing
+    </div>
+  `;
+}
+
+async function renderEditor() {
+  const editorMain = document.getElementById('editor-main');
+  if (!editorMain) return;
+  
+  const theme = editorState.themes[editorState.selectedTheme];
+  if (!theme) return;
+  
+  const sub = theme.subs.find(s => s.name === editorState.selectedSub);
+  if (!sub) return;
+  
+  // Load manifest
+  try {
+    const manifestResult = await window.themeAPI.readSubThemeManifest(editorState.selectedTheme, sub.name);
+    if (manifestResult && !manifestResult.error) {
+      editorState.manifest = manifestResult.manifest;
+    }
+  } catch (e) {
+    console.error('Error loading manifest:', e);
+  }
+  
+  // Render sub-theme selector
+  let subThemeTabs = '';
+  for (const s of theme.subs) {
+    const isActive = s.name === editorState.selectedSub;
+    subThemeTabs += `
+      <div class="subtheme-tab ${isActive ? 'active' : ''}" onclick="selectSubTheme('${s.name}')">
+        ${s.meta?.name || s.name}
+      </div>
+    `;
+  }
+  
+  // Render preview
+  const previewHtml = await renderPreview(theme, sub);
+  
+  // Render editor panels
+  const panelsHtml = renderEditorPanels(theme, sub);
+  
+  editorMain.innerHTML = `
+    <div class="subtheme-selector">
+      <div class="subtheme-tabs">
+        ${subThemeTabs}
+      </div>
+    </div>
+    
+    ${previewHtml}
+    
+    <div class="editor-panels">
+      ${panelsHtml}
+    </div>
+  `;
+}
+
+async function renderPreview(theme, sub) {
+  // Use wallpaper preview image from sub-theme data
+  let previewSrc = '';
+  if (sub.wallpaperPreview) {
+    previewSrc = 'file:///' + sub.wallpaperPreview.replace(/\\/g, '/');
+  }
+  
+  // Load theme CSS styles
+  let cssVars = '';
+  if (editorState.manifest && editorState.manifest['root-variables']) {
+    const vars = editorState.manifest['root-variables'];
+    cssVars = Object.entries(vars).map(([k, v]) => `${k}: ${v};`).join(' ');
+  }
+  
+  // Parse bars and widgets from config
+  const bars = parseConfigBars();
+  const widgetConfigs = parseWidgetConfigs();
+  
+  console.log('Widget configs parsed:', Object.keys(widgetConfigs).length, 'widgets');
+  
+  // Bar selector tabs
+  let barTabs = '';
+  let barPreviews = '';
+  
+  if (bars && bars.length > 0) {
+    for (let i = 0; i < bars.length; i++) {
+      const bar = bars[i];
+      const isActive = i === 0;
+      barTabs += `
+        <div class="subtheme-tab ${isActive ? 'active' : ''}" onclick="switchBarPreview(${i})" style="font-size: 12px;">
+          ${bar.name}
+        </div>
+      `;
+      
+      // Create widgets HTML for this bar
+      const positions = ['left', 'center', 'right'];
+      let leftWidgets = '';
+      let centerWidgets = '';
+      let rightWidgets = '';
+      
+      for (const pos of positions) {
+        const posWidgets = bar.widgets[pos] || [];
+        let html = '';
+        
+        for (const widgetName of posWidgets) {
+          const widgetHtml = renderPreviewWidget(widgetName, widgetConfigs[widgetName]);
+          html += widgetHtml;
+        }
+        
+        if (pos === 'left') leftWidgets = html;
+        else if (pos === 'center') centerWidgets = html;
+        else if (pos === 'right') rightWidgets = html;
+      }
+      
+      barPreviews += `
+        <div class="bar-preview-container ${isActive ? 'active' : ''}" data-bar-index="${i}">
+          <div class="preview-bar" style="${cssVars}">
+            <div class="preview-bar-section preview-bar-left">${leftWidgets || ''}</div>
+            <div class="preview-bar-section preview-bar-center">${centerWidgets || ''}</div>
+            <div class="preview-bar-section preview-bar-right">${rightWidgets || ''}</div>
+          </div>
+        </div>
+      `;
+    }
+  } else {
+    barPreviews = `
+      <div class="bar-preview-container active" data-bar-index="0">
+        <div class="preview-bar">
+          <div class="preview-widget">Loading...</div>
+        </div>
+      </div>
+    `;
+  }
+  
+  return `
+    <div class="preview-section">
+      <div class="preview-header">
+        <h3>Live Preview</h3>
+        ${barTabs ? `<div class="subtheme-tabs" style="margin: 0;">${barTabs}</div>` : ''}
+      </div>
+      <div class="preview-desktop">
+        ${previewSrc ? `<img src="${previewSrc}" class="preview-wallpaper" alt="Wallpaper preview">` : ''}
+        ${barPreviews}
+      </div>
+    </div>
+  `;
+}
+
+function renderPreviewWidget(widgetName, config) {
+  if (!config) {
+    // Default fallback - return empty to avoid showing placeholder
+    console.warn('No config found for widget:', widgetName);
+    return '';
+  }
+  
+  const options = config.options || {};
+  let label = options.label || '';
+  let icon = '';
+  
+  // Extract icon from label
+  if (label.includes('<span>') && label.includes('</span>')) {
+    const iconMatch = label.match(/<span>([^<]+)<\/span>/);
+    if (iconMatch) {
+      icon = iconMatch[1];
+      label = label.replace(/<span>[^<]+<\/span>\s*/g, '');
+    }
+  }
+  
+  // Widget-specific sample data
+  const widgetSamples = {
+    'home': { icon: icon || '', label: '' },
+    'komorebi_workspaces': { icon: '', label: '' },
+    'active_window': { icon: '', label: 'Visual Studio Code' },
+    'clock': { icon: '', label: new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false}) },
+    'cpu': { icon: '', label: 'CPU 45%' },
+    'memory': { icon: '', label: 'MEM 62%' },
+    'gpu': { icon: '', label: 'GPU 38%' },
+    'disk': { icon: '', label: 'Disk 58%' },
+    'volume': { icon: icon || '', label: '50' },
+    'microphone': { icon: icon || '', label: '' },
+    'media': { icon: icon || '', label: '' },
+    'cava': { icon: '', label: '' },
+    'wifi': { icon: icon || '', label: '' },
+    'battery': { icon: icon || ' ', label: '85%' },
+    'bluetooth': { icon: icon || '', label: '2' },
+    'notifications': { icon: icon || '', label: '3' },
+    'systray': { icon: '', label: '      ' },
+    'power_menu': { icon: icon || '', label: '' },
+    'apps': { icon: '', label: '  ' },
+    'bin': { icon: icon || '󰩹', label: '12 (2.4MB)' },
+    'theme_switcher': { icon: icon || '󰃟', label: '' },
+  };
+  
+  // Get sample data for this widget
+  let sampleData = widgetSamples[widgetName];
+  
+  if (!sampleData) {
+    // Generic placeholder parsing
+    label = label
+      .replace(/\\u([0-9a-fA-F]{4})/g, (match, code) => String.fromCharCode(parseInt(code, 16)))
+      .replace(/\\udb([0-9a-fA-F]{2})\\ud([0-9a-fA-F]{3})/g, '')
+      .replace(/\{[^}]+\}/g, (match) => {
+        if (match.includes('percent') || match.includes('level')) return '75';
+        if (match.includes('count')) return '3';
+        if (match.includes('title')) return 'Song';
+        if (match.includes('device_count')) return '2';
+        if (match.includes('items_count')) return '5';
+        if (match.includes('items_size')) return '1.2MB';
+        if (match.includes('%H:%M:%S')) return new Date().toLocaleTimeString('en-US', {hour12: false});
+        if (match.includes('%H:%M')) return new Date().toLocaleTimeString('en-US', {hour: '2-digit', minute: '2-digit', hour12: false});
+        return '';
+      })
+      .trim();
+    
+    if (label === '<span></span>' || label === '') label = '';
+    sampleData = { icon: icon, label: label };
+  }
+  
+  return `
+    <div class="widget">
+      <div class="widget-container">
+        ${sampleData.icon ? `<span class="icon">${sampleData.icon}</span>` : ''}
+        ${sampleData.label ? `<span class="label">${sampleData.label}</span>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+// Parse bars from config
+function parseConfigBars() {
+  if (!editorState.config) {
+    console.warn('No config loaded');
+    return [];
+  }
+  
+  console.log('Config length:', editorState.config.length);
+  console.log('First 500 chars:', editorState.config.substring(0, 500));
+  
+  const lines = editorState.config.split('\n');
+  console.log('Total lines:', lines.length);
+  
+  const bars = [];
+  let currentBar = null;
+  let inBarsSection = false;
+  let inBarSection = false;
+  let inWidgetsSection = false;
+  let currentPosition = '';
+  let depth = 0;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Detect bars: section
+    if (line.match(/^bars:/)) {
+      console.log(`Line ${i}: Found bars section`);
+      inBarsSection = true;
+      continue;
+    }
+    
+    if (inBarsSection) {
+      // Detect bar name (e.g., "  primary-bar:")
+      if (line.match(/^  ([\w-]+):/)) {
+        if (currentBar) {
+          console.log('Pushing bar:', currentBar);
+          bars.push(currentBar);
+        }
+        const barName = line.match(/^  ([\w-]+):/)[1];
+        console.log(`Line ${i}: Found bar "${barName}"`);
+        currentBar = { name: barName, widgets: { left: [], center: [], right: [] } };
+        inBarSection = true;
+        inWidgetsSection = false;
+        continue;
+      }
+      
+      // Detect widgets: section within a bar
+      if (inBarSection && line.match(/^    widgets:/)) {
+        console.log(`Line ${i}: Found widgets section in bar`);
+        inWidgetsSection = true;
+        continue;
+      }
+      
+      // Detect position (left/center/right)
+      if (inWidgetsSection && line.match(/^      (left|center|right):/)) {
+        currentPosition = line.match(/^      (left|center|right):/)[1];
+        console.log(`Line ${i}: Found position "${currentPosition}"`);
+        continue;
+      }
+      
+      // Detect widget name (with quotes) - handle both Unix (\n) and Windows (\r\n) line endings
+      if (inWidgetsSection && currentPosition) {
+        const match = line.match(/^        - "([^"]+)"/);
+        if (match) {
+          const widgetName = match[1];
+          console.log(`Line ${i}: Found widget "${widgetName}" in position "${currentPosition}"`);
+          currentBar.widgets[currentPosition].push(widgetName);
+          continue;
+        }
+      }
+      
+      // Exit bars section when we hit top-level key (no leading spaces)
+      if (line.match(/^[a-z]/)) {
+        console.log(`Line ${i}: Exiting bars section`);
+        if (currentBar) bars.push(currentBar);
+        inBarsSection = false;
+        break;
+      }
+    }
+  }
+  
+  if (currentBar && !bars.includes(currentBar)) {
+    console.log('Pushing final bar:', currentBar);
+    bars.push(currentBar);
+  }
+  
+  console.log('Final parsed bars:', bars);
+  return bars;
+}
+
+// Parse widget configurations from config YAML
+function parseWidgetConfigs() {
+  if (!editorState.config) {
+    console.warn('No config loaded for widget parsing');
+    return {};
+  }
+  
+  const lines = editorState.config.split('\n');
+  const widgets = {};
+  let inWidgetsSection = false;
+  let currentWidget = null;
+  let currentWidgetName = '';
+  let inOptionsSection = false;
+  let depth = 0;
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    
+    // Detect widgets: section
+    if (line.match(/^widgets:/)) {
+      inWidgetsSection = true;
+      continue;
+    }
+    
+    if (inWidgetsSection) {
+      // Detect widget name (e.g., "  home:")
+      const widgetMatch = line.match(/^  (\w+):/);
+      if (widgetMatch) {
+        // Save previous widget if exists
+        if (currentWidget && currentWidgetName) {
+          widgets[currentWidgetName] = currentWidget;
+        }
+        currentWidgetName = widgetMatch[1];
+        currentWidget = { options: {} };
+        inOptionsSection = false;
+        continue;
+      }
+      
+      // Detect options: section
+      if (currentWidget && line.match(/^    options:/)) {
+        inOptionsSection = true;
+        continue;
+      }
+      
+      // Parse label within options
+      if (inOptionsSection && line.match(/^      label:/)) {
+        const labelMatch = line.match(/^      label:\s*(.+)$/);
+        if (labelMatch) {
+          let label = labelMatch[1].trim();
+          // Remove quotes if present
+          if ((label.startsWith('"') && label.endsWith('"')) || 
+              (label.startsWith("'") && label.endsWith("'"))) {
+            label = label.slice(1, -1);
+          }
+          currentWidget.options.label = label;
+        }
+        continue;
+      }
+      
+      // Exit widgets section when we hit another top-level section
+      if (line.match(/^[a-z]/) && !line.match(/^  /)) {
+        if (currentWidget && currentWidgetName) {
+          widgets[currentWidgetName] = currentWidget;
+        }
+        break;
+      }
+    }
+  }
+  
+  // Save last widget if exists
+  if (currentWidget && currentWidgetName) {
+    widgets[currentWidgetName] = currentWidget;
+  }
+  
+  console.log('Parsed widget configs:', widgets);
+  return widgets;
+}
+
+window.switchBarPreview = function(index) {
+  const containers = document.querySelectorAll('.bar-preview-container');
+  containers.forEach((c, i) => {
+    if (i === index) {
+      c.classList.add('active');
+    } else {
+      c.classList.remove('active');
+    }
+  });
+};
+
+function renderEditorPanels(theme, sub) {
+  const manifest = editorState.manifest || {};
+  const meta = manifest.meta || {};
+  const wallpaperEngine = manifest['wallpaper-engine'] || {};
+  const rootVars = manifest['root-variables'] || {};
+  
+  // Generate color inputs for ALL root variables
+  let colorInputsHtml = '';
+  const colorVars = Object.keys(rootVars).filter(key => 
+    key.startsWith('--') && (rootVars[key].startsWith('#') || rootVars[key].startsWith('rgb'))
+  );
+  
+  for (const varName of colorVars) {
+    const value = rootVars[varName];
+    const displayName = varName.replace(/^--/, '').replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+    const inputId = `color-${varName.replace(/^--/, '').replace(/-/g, '_')}`;
+    
+    // Extract hex color from rgba if needed
+    let hexValue = value;
+    if (value.startsWith('rgba') || value.startsWith('rgb')) {
+      // For rgba/rgb, we'll use a default color picker value
+      hexValue = '#888888';
+    }
+    
+    colorInputsHtml += `
+      <div class="form-group">
+        <label class="form-label">${displayName}</label>
+        <div class="color-input-group">
+          <input type="color" class="color-preview" id="${inputId}" value="${hexValue}" data-var="${varName}">
+          <input type="text" class="form-input" id="${inputId}-text" value="${value}" data-var="${varName}">
+        </div>
+      </div>
+    `;
+  }
+  
+  const wallpaperEnabled = wallpaperEngine.enabled !== false;
+  const workshopId = wallpaperEngine.link ? wallpaperEngine.link.match(/id=(\d+)/)?.[1] || '' : '';
+  
+  return `
+    <!-- Metadata Panel -->
+    <div class="editor-panel">
+      <h4><span class="editor-panel-icon">📝</span> Metadata</h4>
+      <div class="form-group">
+        <label class="form-label">Sub-theme Name</label>
+        <input type="text" class="form-input" id="meta-name" value="${meta.name || sub.name}" placeholder="Enter name">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Version</label>
+        <input type="text" class="form-input" id="meta-version" value="${meta.version || '1.0.0'}" placeholder="1.0.0">
+      </div>
+    </div>
+    
+    <!-- Color Variables Panel -->
+    <div class="editor-panel" style="max-height: 400px; overflow-y: auto;">
+      <h4><span class="editor-panel-icon">🎨</span> Theme Colors</h4>
+      ${colorInputsHtml || '<p style="color: #9aa0c0;">No color variables found</p>'}
+    </div>
+    
+    <!-- Wallpaper Panel -->
+    <div class="editor-panel">
+      <h4><span class="editor-panel-icon">🖼️</span> Wallpaper Settings</h4>
+      <div class="wallpaper-setting">
+        <div class="toggle-switch ${wallpaperEnabled ? 'enabled' : ''}" id="wallpaper-toggle" onclick="toggleWallpaper()">
+          <div class="toggle-knob"></div>
+        </div>
+        <span style="color: #cbd4ff; font-size: 14px;">Wallpaper ${wallpaperEnabled ? 'Enabled' : 'Disabled'}</span>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Workshop ID</label>
+        <input type="text" class="form-input" id="workshop-id" value="${workshopId}" placeholder="Enter Steam Workshop ID" ${!wallpaperEnabled ? 'disabled' : ''}>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Workshop Link</label>
+        <input type="text" class="form-input" id="workshop-link" value="${wallpaperEngine.link || ''}" placeholder="https://steamcommunity.com/sharedfiles/filedetails/?id=..." ${!wallpaperEnabled ? 'disabled' : ''}>
+      </div>
+    </div>
+    
+    <!-- Widgets Panel -->
+    <div class="editor-panel" style="grid-column: 1 / -1;">
+      <h4><span class="editor-panel-icon">📦</span> Status Bar Widgets</h4>
+      <div class="widget-list" id="widget-list">
+        ${renderWidgetList()}
+      </div>
+    </div>
+    
+    <!-- Save Button -->
+    <div class="editor-panel" style="grid-column: 1 / -1;">
+      <button class="save-btn" onclick="saveEditorChanges()">Save Changes</button>
+    </div>
+  `;
+}
+
+function renderWidgetList() {
+  const bars = parseConfigBars();
+  if (!bars || bars.length === 0) return '<p style="color: #9aa0c0; text-align: center;">No widgets found</p>';
+  
+  try {
+    // Create tabs for each bar
+    let tabsHtml = '';
+    let contentHtml = '';
+    
+    for (let barIndex = 0; barIndex < bars.length; barIndex++) {
+      const bar = bars[barIndex];
+      const isActive = barIndex === 0;
+      
+      // Tab button
+      tabsHtml += `
+        <button class="widget-bar-tab ${isActive ? 'active' : ''}" onclick="switchWidgetBar(${barIndex})">
+          ${bar.name}
+        </button>
+      `;
+      
+      // Content for this bar
+      let barContentHtml = '';
+      
+      // Group widgets by position
+      const positions = ['left', 'center', 'right'];
+      for (const pos of positions) {
+        const widgets = bar.widgets[pos] || [];
+        if (widgets.length === 0) continue;
+        
+        // Add section divider
+        barContentHtml += `
+          <div class="widget-section-divider">${pos}</div>
+        `;
+        
+        // Add widgets for this position
+        for (let i = 0; i < widgets.length; i++) {
+          const widgetName = widgets[i];
+          barContentHtml += `
+            <div class="widget-item" draggable="true">
+              <span class="widget-drag-handle">⋮⋮</span>
+              <span class="widget-name">${widgetName}</span>
+              <div class="widget-actions">
+                <button class="widget-btn" onclick="moveWidgetUp('${bar.name}', '${pos}', ${i})" title="Move up">▲</button>
+                <button class="widget-btn" onclick="moveWidgetDown('${bar.name}', '${pos}', ${i})" title="Move down">▼</button>
+                <button class="widget-btn" onclick="removeWidget('${bar.name}', '${pos}', ${i})" title="Remove">✕</button>
+              </div>
+            </div>
+          `;
+        }
+      }
+      
+      contentHtml += `
+        <div class="widget-bar-content ${isActive ? 'active' : ''}" data-bar-index="${barIndex}">
+          ${barContentHtml}
+        </div>
+      `;
+    }
+    
+    return `
+      <div class="widget-bar-tabs">
+        ${tabsHtml}
+      </div>
+      ${contentHtml}
+    `;
+  } catch (e) {
+    console.error('Error rendering widget list:', e);
+    return '<p style="color: #ff6b6b; text-align: center;">Error loading widgets</p>';
+  }
+}
+
+window.switchWidgetBar = function(index) {
+  const tabs = document.querySelectorAll('.widget-bar-tab');
+  const contents = document.querySelectorAll('.widget-bar-content');
+  
+  tabs.forEach((tab, i) => {
+    if (i === index) {
+      tab.classList.add('active');
+    } else {
+      tab.classList.remove('active');
+    }
+  });
+  
+  contents.forEach((content, i) => {
+    if (i === index) {
+      content.classList.add('active');
+    } else {
+      content.classList.remove('active');
+    }
+  });
+};
+
+// Widget management functions
+window.moveWidgetUp = function(barName, position, index) {
+  // TODO: Implement widget position change
+  showToast('Widget reordering coming soon', 'info');
+};
+
+window.moveWidgetRight = function(index) {
+  showToast('Widget reordering coming soon', 'info');
+};
+
+window.removeWidget = function(index) {
+  showToast('Widget removal coming soon', 'info');
+};
+
+window.toggleWallpaper = async function() {
+  const toggle = document.getElementById('wallpaper-toggle');
+  const isEnabled = toggle.classList.contains('enabled');
+  
+  if (isEnabled) {
+    // Disable
+    const result = await window.themeAPI.disableSubWallpaper(editorState.selectedTheme, editorState.selectedSub);
+    if (result && result.ok) {
+      showToast('Wallpaper disabled', 'success');
+      renderEditor();
+    }
+  } else {
+    // Enable
+    const result = await window.themeAPI.enableSubWallpaper(editorState.selectedTheme, editorState.selectedSub);
+    if (result && result.ok) {
+      showToast('Wallpaper enabled', 'success');
+      renderEditor();
+    }
+  }
+};
+
+window.saveEditorChanges = async function() {
+  showToast('Save functionality coming soon', 'info');
+  // TODO: Implement save logic
+};
+
+// Sync color inputs (delegated event listener for dynamic elements)
+document.addEventListener('input', (e) => {
+  if (e.target.type === 'color' && e.target.classList.contains('color-preview')) {
+    const textInput = document.getElementById(e.target.id + '-text');
+    if (textInput) textInput.value = e.target.value;
+  } else if (e.target.classList.contains('form-input') && e.target.id.endsWith('-text')) {
+    const colorId = e.target.id.replace('-text', '');
+    const colorInput = document.getElementById(colorId);
+    if (colorInput && colorInput.type === 'color') {
+      // Only update if it's a valid hex color
+      if (/^#[0-9A-F]{6}$/i.test(e.target.value)) {
+        colorInput.value = e.target.value;
+      }
+    }
+  }
+});
+
+// ===== OLD SIMPLE EDITOR (DEPRECATED) =====
 async function loadEditorContent() {
   const editorContent = document.getElementById('editor-content');
   if (!editorContent) return;

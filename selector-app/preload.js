@@ -20,6 +20,10 @@ const themeAPI = {
   disableSubWallpaper: (theme, sub) => ipcRenderer.invoke('disable-sub-wallpaper', theme, sub),
   enableSubWallpaper: (theme, sub) => ipcRenderer.invoke('enable-sub-wallpaper', theme, sub),
 
+  // editor functions
+  readThemeFile: (theme, filename) => ipcRenderer.invoke('read-theme-file', theme, filename),
+  readSubThemeManifest: (theme, sub) => ipcRenderer.invoke('read-subtheme-manifest', theme, sub),
+
   // convenience
   showSelector: () => ipcRenderer.invoke('show-selector')
 };

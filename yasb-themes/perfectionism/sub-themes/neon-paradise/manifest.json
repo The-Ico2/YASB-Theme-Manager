@@ -48,8 +48,8 @@
     "--btn-active": "rgba(188, 19, 254, 0.20)"
   },
   "wallpaper-engine": {
+    "enabled": true,
     "file": "$subTheme/wallpaper/project.json",
     "link": "https://steamcommunity.com/sharedfiles/filedetails/?id=3163333989"
-  },
-  "skip-provided-wallpaper": false
+  }
 }

@@ -485,6 +485,64 @@ ipcMain.handle('get-themes', async () => {
       }
     }
 
+    // Populate subs array for each theme
+    for (const themeName of Object.keys(out)) {
+      const themeObj = out[themeName];
+      if (!themeObj.__basePath) continue;
+      
+      const subRoot = path.join(themeObj.__basePath, 'sub-themes');
+      if (fs.existsSync(subRoot)) {
+        const subs = fs.readdirSync(subRoot, { withFileTypes: true }).filter(d => d.isDirectory());
+        themeObj.subs = [];
+        
+        for (const s of subs) {
+          const subPath = path.join(subRoot, s.name);
+          const manifestPath = path.join(subPath, 'manifest.json');
+          const metaPath = path.join(subPath, 'meta.json');
+          
+          let manifest = null;
+          let meta = null;
+          
+          if (fs.existsSync(manifestPath)) {
+            try {
+              manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            } catch (e) {
+              manifest = { error: e.message };
+            }
+          }
+          
+          if (fs.existsSync(metaPath)) {
+            try {
+              meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            } catch (e) {}
+          }
+          
+          // Look for wallpaper preview image in sub-theme folder (wallpaper.*)
+          let wallpaperPreview = null;
+          try {
+            const files = fs.readdirSync(subPath, { withFileTypes: true });
+            const wallpaperFile = files.find(f => 
+              f.isFile() && 
+              f.name.toLowerCase().startsWith('wallpaper.') &&
+              /\.(png|jpg|jpeg|gif|webp|bmp|svg)$/i.test(f.name)
+            );
+            if (wallpaperFile) {
+              wallpaperPreview = path.join(subPath, wallpaperFile.name);
+            }
+          } catch (e) {
+            console.warn(`Error reading sub-theme folder for wallpaper preview: ${e.message}`);
+          }
+          
+          themeObj.subs.push({
+            name: s.name,
+            manifest: manifest,
+            meta: meta || (manifest ? manifest.meta : null),
+            wallpaperPreview: wallpaperPreview
+          });
+        }
+      }
+    }
+
     return out;
   } catch (e) {
     console.error('get-themes error:', e && e.stack ? e.stack : e);
@@ -745,6 +803,34 @@ ipcMain.handle('enable-sub-wallpaper', (event, theme, sub) => {
     
     fs.writeFileSync(manifestPath, JSON.stringify(parsed, null, 2), 'utf8');
     return { ok: true };
+  } catch (e) {
+    return { error: e && e.message ? e.message : String(e) };
+  }
+});
+
+// Read theme config file (config.yaml)
+ipcMain.handle('read-theme-file', (event, theme, filename) => {
+  try {
+    const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
+    const filePath = path.join(yasbThemesDir, theme, filename);
+    if (!fs.existsSync(filePath)) return { error: 'file not found' };
+    const content = fs.readFileSync(filePath, 'utf8');
+    return { content };
+  } catch (e) {
+    return { error: e && e.message ? e.message : String(e) };
+  }
+});
+
+// Read sub-theme manifest
+ipcMain.handle('read-subtheme-manifest', (event, theme, sub) => {
+  try {
+    const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
+    const manifestPath = path.join(yasbThemesDir, theme, 'sub-themes', sub, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) return { error: 'manifest not found' };
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    let manifest = {};
+    try { manifest = JSON.parse(raw); } catch (e) { manifest = {}; }
+    return { manifest };
   } catch (e) {
     return { error: e && e.message ? e.message : String(e) };
   }
