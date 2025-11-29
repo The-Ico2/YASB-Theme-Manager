@@ -33,16 +33,38 @@ $root = $scriptDir
 # $themeJsonPath = Join-Path $root "themes.json"
 # New structure: status bar themes live in `yasb-themes`.
 $yasbThemesRoot = Join-Path $root "yasb-themes"
-$stateFile     = Join-Path $root "theme.current_status"
-$stateSubFile  = Join-Path $root "subtheme.current_status"
+$stateFile = Join-Path $root "theme.current_status"
+$stateSubFile = Join-Path $root "subtheme.current_status"
 # Backwards-compat: legacy themes folder
 # $legacyThemesFolder = Join-Path $root "themes"
 
 # Adjust path to YASB stylesheet - update if your layout differs
 # $yasbCssPath = Join-Path $env:USERPROFILE ".config\yasb\styles.css"
 
-# Path to Wallpaper Engine executable — adjust if installed elsewhere
-$wpeExe = "C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\wallpaper64.exe"
+# Default paths (used if no settings present)
+$DEFAULT_WPE_EXE = "C:\Program Files (x86)\Steam\steamapps\common\wallpaper_engine\wallpaper64.exe"
+$DEFAULT_WPE_WORKSHOP = "C:\Program Files (x86)\Steam\steamapps\workshop\content\431960"
+
+# Read selector-app settings.json (if present) to locate Wallpaper Engine paths
+$settingsPath = Join-Path $root 'settings.json'
+$wpeExe = $null
+$weWorkshopRoot = $null
+if (Test-Path $settingsPath) {
+  try {
+    $sRaw = Get-Content $settingsPath -Raw -ErrorAction Stop
+    $sObj = $sRaw | ConvertFrom-Json
+    if ($sObj.WE_Exe) { $wpeExe = $sObj.WE_Exe }
+    if ($sObj.WE_Workshop) { $weWorkshopRoot = $sObj.WE_Workshop }
+  }
+  catch {
+    # ignore parse errors and fall back
+  }
+}
+# Fallback to environment variable or defaults
+if (-not $wpeExe) {
+  if ($env:WALLPAPER_ENGINE_EXE -and (Test-Path $env:WALLPAPER_ENGINE_EXE)) { $wpeExe = $env:WALLPAPER_ENGINE_EXE } else { $wpeExe = $DEFAULT_WPE_EXE }
+}
+if (-not $weWorkshopRoot) { $weWorkshopRoot = $DEFAULT_WPE_WORKSHOP }
 
 # Helper: list status themes (folders under yasb-themes)
 function Get-StatusThemes {
@@ -102,7 +124,8 @@ if ($cycle) {
   $choice = Get-NextSubTheme
   $chosenTheme = $choice.theme
   $chosenSub = $choice.sub
-} else {
+}
+else {
   $p = Convert-ThemeSelection $select
   $chosenTheme = $p.theme
   $chosenSub = $p.sub
@@ -166,7 +189,8 @@ function Set-StatusTheme($themeName, $subName) {
     $pattern = '(?s):root\s*\{.*?\}'
     if ($existing -and [regex]::IsMatch($existing, $pattern)) {
       $newContent = [regex]::Replace($existing, $pattern, $newRootBlock, 'Singleline')
-    } else {
+    }
+    else {
       $newContent = $newRootBlock + "`n" + $existing
     }
 
@@ -184,47 +208,175 @@ function Set-StatusTheme($themeName, $subName) {
     # Touch the file to ensure file-watchers observe the change
     if (Test-Path $targetStyle) { try { (Get-Item $targetStyle).LastWriteTime = Get-Date } catch {} }
 
+    # Save state files BEFORE handling wallpaper so cycling works even if wallpaper fails
+    Set-Content -Path $stateFile -Value $themeName -Encoding UTF8
+    Set-Content -Path $stateSubFile -Value $subName -Encoding UTF8
+
     # Apply wallpaper if present in manifest
     if ($manifest -and $manifest."wallpaper-engine" -and $manifest."wallpaper-engine".file) {
       $wallpath = $manifest."wallpaper-engine".file
-      # allow relative path in sub-theme folder
-      if (-not (Test-Path $wallpath)) { $rel = Join-Path (Join-Path $themeDir "sub-themes\$subName") $wallpath; if (Test-Path $rel) { $wallpath = $rel } }
-      if (Test-Path $wallpath) { & "$wpeExe" -control openWallpaper -file "$wallpath"; if ($LASTEXITCODE -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $LASTEXITCODE" } } else { Write-Output "theme:wallpaper: SKIP (missing)" }
+      $workshopId = $null
+      # If manifest provides a workshop link, extract the numeric id
+      if ($manifest."wallpaper-engine".link) {
+        $lnk = $manifest."wallpaper-engine".link
+        if ($lnk -match 'id=(\d+)') { $workshopId = $Matches[1] }
+        elseif ($lnk -match '/([0-9]{6,})') { $workshopId = $Matches[1] }
+      }
+
+      # If we have a workshop id, prefer handling via workshop check
+      if ($workshopId) {
+        # locate Steam 'steamapps' root by walking up from the wallpaper exe if possible
+        function Find-SteamAppsRoot($startPath) {
+          $p = $startPath
+          while ($p -and ($p -ne [System.IO.Path]::GetPathRoot($p))) {
+            if ((Split-Path $p -Leaf) -ieq 'steamapps') { return $p }
+            $p = Split-Path $p -Parent
+          }
+          return $null
+        }
+
+        $steamAppsRoot = $null
+        if ($wpeExe -and (Test-Path $wpeExe)) {
+          $candidate = Split-Path -Parent (Split-Path -Parent $wpeExe)
+          $steamAppsRoot = Find-SteamAppsRoot $candidate
+        }
+        # Fallback common locations
+        if (-not $steamAppsRoot) {
+          $fallbacks = @(
+            "$env:ProgramFiles(x86)\Steam\steamapps",
+            "$env:ProgramFiles\Steam\steamapps",
+            "$env:ProgramFiles(x86)\SteamLibrary\steamapps",
+            "$env:ProgramFiles\SteamLibrary\steamapps"
+          )
+          foreach ($f in $fallbacks) { if (Test-Path $f) { $steamAppsRoot = $f; break } }
+        }
+
+        $workshopFound = $false
+        $weWorkshopFolder = $null
+        # If we have a configured workshop root from settings, prefer that
+        if ($weWorkshopRoot) {
+          $maybe = Join-Path $weWorkshopRoot "$workshopId"
+          if (Test-Path $maybe) { $weWorkshopFolder = $maybe; $workshopFound = $true }
+        }
+        if (-not $workshopFound -and $steamAppsRoot) {
+          $weWorkshopFolder = Join-Path $steamAppsRoot "workshop\content\431960\$workshopId"
+          if (Test-Path $weWorkshopFolder) { $workshopFound = $true }
+        }
+
+        # user-state to remember 'don't ask again' for a given subtheme
+        $userStateDir = Join-Path $root 'user-state'
+        if (-not (Test-Path $userStateDir)) { New-Item -Path $userStateDir -ItemType Directory -Force | Out-Null }
+        $skipFile = Join-Path $userStateDir "$themeName---$subName---skip-workshop.txt"
+
+        if (-not $workshopFound) {
+          if ($manifest -and $manifest.'skip-provided-wallpaper') {
+            Write-Output "theme:wallpaper: SKIP (user disabled provided wallpaper)"
+          }
+          elseif (Test-Path $skipFile) {
+            Write-Output "theme:wallpaper: SKIP (user skipped)"
+          }
+          else {
+            # emit handshake JSON to GUI so it can prompt and redirect
+            $out = @{ needs_workshop = $true; theme = $themeName; sub = $subName; workshop_id = $workshopId; steam_url = "steam://url/CommunityFilePage/$workshopId" }
+            $json = $out | ConvertTo-Json -Compress -Depth 6
+            Write-Output $json
+            # Don't exit - continue to apply the theme (just skip wallpaper)
+          }
+        }
+        else {
+          # workshop item present — find a JSON project file to open
+          if ($manifest -and $manifest.'skip-provided-wallpaper') {
+            Write-Output "theme:wallpaper: SKIP (user disabled provided wallpaper)"
+          }
+          else {
+            $projectJson = Get-ChildItem -Path $weWorkshopFolder -Filter '*.json' -Recurse -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($projectJson) {
+              $projPath = $projectJson.FullName
+              if (-not (Test-Path $wpeExe)) { Write-Warning "Wallpaper Engine executable not found: $wpeExe"; Write-Output "theme:wallpaper: SKIP (no exe)" }
+              else {
+                try {
+                  $args = @('-control', 'openWallpaper', '-file', "$projPath")
+                  $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                  $exit = $p.ExitCode
+                  if ($exit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $exit" }
+                }
+                catch {
+                  Write-Warning "Failed to run Wallpaper Engine: $_"
+                  Write-Output "theme:wallpaper: FAIL"
+                }
+              }
+            }
+            else {
+              Write-Output "theme:wallpaper: SKIP (no project json)"
+            }
+          }
+        }
+        else {
+          # legacy behavior: manifest provided a local file path
+          # Resolve $subTheme placeholder if present (manifest may use "$subTheme/..." shorthand)
+          $subDir = Join-Path $themeDir "sub-themes\$subName"
+          if ($wallpath -like '*$subTheme*') {
+            $wallpath = $wallpath -replace '\$subTheme', [regex]::Escape($subDir)
+          }
+
+          # Allow relative path in sub-theme folder (if still not an existing path)
+          if (-not (Test-Path $wallpath)) {
+            $rel = Join-Path $subDir $wallpath
+            if (Test-Path $rel) { $wallpath = $rel }
+          }
+
+          if (Test-Path $wallpath) {
+            if (-not (Test-Path $wpeExe)) { Write-Warning "Wallpaper Engine executable not found: $wpeExe"; Write-Output "theme:wallpaper: SKIP (no exe)" }
+            else {
+              try {
+                $args = @('-control', 'openWallpaper', '-file', "$wallpath")
+                $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                $exit = $p.ExitCode
+                if ($exit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $exit" }
+              }
+              catch { Write-Warning "Failed to run Wallpaper Engine: $_"; Write-Output "theme:wallpaper: FAIL" }
+            }
+          }
+          else {
+            Write-Output "theme:wallpaper: SKIP (missing)"
+          }
+        }
+      }
     }
 
-    # save state
-    Set-Content -Path $stateFile -Value $themeName -Encoding UTF8
-    Set-Content -Path $stateSubFile -Value $subName -Encoding UTF8
+    # Theme applied successfully
     Write-Output "theme:applied: $themeName/$subName"
     return
+
+    # No sub-theme: simply copy base style file if present
+    if ($baseStylePath -and (Test-Path $baseStylePath)) {
+      $tmp = "$targetStyle.tmp.$PID"
+      # Read and sanitize the base style before writing, to fix malformed custom-property names
+      try {
+        $baseContent = Get-Content $baseStylePath -Raw -ErrorAction Stop
+      }
+      catch { Write-Error "Failed to read base style: $_"; exit 1 }
+      $sanitizedBase = [regex]::Replace($baseContent, '(-{3,})([A-Za-z0-9_-]+)', '--$2')
+      try { Set-Content -Path $tmp -Value $sanitizedBase -Encoding UTF8 -Force -ErrorAction Stop } catch { Write-Error "Failed to write temp base style: $_"; if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }; exit 1 }
+      Move-Item -Path $tmp -Destination $targetStyle -Force
+      if (Test-Path $targetStyle) { try { (Get-Item $targetStyle).LastWriteTime = Get-Date } catch {} }
+    }
+
+    # Save state for themes without sub-themes
+    Set-Content -Path $stateFile -Value $themeName -Encoding UTF8
+    if (Test-Path $stateSubFile) { Remove-Item $stateSubFile -Force -ErrorAction SilentlyContinue }
+    Write-Output "theme:applied: $themeName"
   }
 
-  # No sub-theme: simply copy base style file if present
-  if ($baseStylePath -and (Test-Path $baseStylePath)) {
-    $tmp = "$targetStyle.tmp.$PID"
-    # Read and sanitize the base style before writing, to fix malformed custom-property names
-    try {
-      $baseContent = Get-Content $baseStylePath -Raw -ErrorAction Stop
-    } catch { Write-Error "Failed to read base style: $_"; exit 1 }
-    $sanitizedBase = [regex]::Replace($baseContent, '(-{3,})([A-Za-z0-9_-]+)', '--$2')
-    try { Set-Content -Path $tmp -Value $sanitizedBase -Encoding UTF8 -Force -ErrorAction Stop } catch { Write-Error "Failed to write temp base style: $_"; if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }; exit 1 }
-    Move-Item -Path $tmp -Destination $targetStyle -Force
-    if (Test-Path $targetStyle) { try { (Get-Item $targetStyle).LastWriteTime = Get-Date } catch {} }
-  }
-
-  Set-Content -Path $stateFile -Value $themeName -Encoding UTF8
-  if (Test-Path $stateSubFile) { Remove-Item $stateSubFile -Force -ErrorAction SilentlyContinue }
-  Write-Output "theme:applied: $themeName"
 }
-
-# Now apply according to chosenTheme / chosenSub
 # Now apply according to chosenTheme / chosenSub
 
 # If the chosen theme has sub-themes and none was provided, emit a JSON payload
 # so GUI callers can prompt the user to pick a sub-theme.
 try {
   $availableSubs = Get-SubThemes $chosenTheme
-} catch {
+}
+catch {
   $availableSubs = @()
 }
 

@@ -258,9 +258,31 @@ async function showPreview(themeName) {
 function applyTheme(themeName) {
   window.themeAPI.applyTheme(themeName)
     .then(async result => {
+      console.debug('applyTheme result', result);
+      
+      // If main sent handshake event, don't process here - event listener handles it
+      if (result && result.handshake_sent) {
+        console.log('applyTheme: handshake event sent, UI will be handled by event listener');
+        return;
+      }
+      
       // If the backend signals a need for sub-theme selection, open the theme page so
       // the user can pick a sub-theme (the page will call applyTheme again with theme/sub)
       if (result && result.needs_sub) {
+        // If the main process indicates sub-theme selection is required but
+        // a representative sub-theme was discovered when scanning themes
+        // (stored as __repSub), auto-apply that sub to improve UX.
+        try {
+          const rep = themes && themes[result.theme] && themes[result.theme].__repSub;
+          if (rep) {
+            // auto-apply the representative sub-theme
+            await window.themeAPI.applyTheme(`${result.theme}/${rep}`);
+            return;
+          }
+        } catch (e) {
+          console.warn('Auto-apply repSub failed', e);
+        }
+
         try {
           await window.themeWindow.openThemePage(result.theme);
         } catch (e) {
@@ -270,18 +292,209 @@ function applyTheme(themeName) {
         return;
       }
 
+      // If backend signals needs_workshop, the promise is intentionally left pending
+      // and the onHandshake event listener will handle the UI (overlay prompt)
+      // So we should not reach here for needs_workshop cases
+      if (result && result.needs_workshop) {
+        console.log('applyTheme: needs_workshop in result (should be handled by event listener)');
+        return;
+      }
+
       if (result && result.ok) {
-        alert('Theme applied: ' + themeName + "\n" + (result.output || ''));
+        showStatusToast('Theme applied successfully');
       } else if (typeof result === 'string') {
-        alert('Theme applied: ' + themeName + "\n" + result);
-      } else {
-        alert('Theme applied: ' + themeName + "\n" + JSON.stringify(result));
+        showStatusToast('Theme applied');
+      } else if (result) {
+        showStatusToast('Theme applied');
       }
     })
     .catch(err => {
-      alert('Failed to apply theme: ' + err);
+      console.error('applyTheme error:', err);
+      showStatusToast('Failed to apply theme: ' + err, 8000);
     });
+  }
+
+function showWaitingOverlay(text) {
+  let el = document.getElementById('waiting-overlay');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'waiting-overlay';
+    el.style.position = 'fixed';
+    el.style.inset = '0';
+    el.style.display = 'flex';
+    el.style.alignItems = 'center';
+    el.style.justifyContent = 'center';
+    el.style.background = 'rgba(0,0,0,0.6)';
+    el.style.zIndex = '9999';
+    el.style.color = '#fff';
+    el.style.fontSize = '18px';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
 }
+
+function hideWaitingOverlay() {
+  const el = document.getElementById('waiting-overlay'); if (el) el.remove();
+}
+
+// Listen for workshop-found events from main
+if (window.themeEvents && typeof window.themeEvents.onWorkshopFound === 'function') {
+  window.themeEvents.onWorkshopFound((data) => {
+    console.debug('workshop-found', data);
+    hideWaitingOverlay();
+    alert(`Workshop item ${data.workshopId} downloaded — applying theme ${data.theme}/${data.sub}`);
+  });
+}
+
+// Listen for streaming theme status messages (e.g. theme:wallpaper: OK/FAIL)
+if (window.themeEvents && typeof window.themeEvents.onThemeStatus === 'function') {
+  window.themeEvents.onThemeStatus((data) => {
+    try {
+      console.debug('theme-status', data);
+      try { showDebugBanner && showDebugBanner(`status: ${data && data.line ? data.line : JSON.stringify(data)}`); } catch(e){}
+      // If a wallpaper OK message arrives, hide waiting overlay
+      if (data && typeof data.line === 'string') {
+        if (data.line.toLowerCase().includes('theme:wallpaper: ok')) {
+          hideWaitingOverlay();
+          // small non-blocking toast
+          showStatusToast('Wallpaper applied');
+        } else if (data.line.toLowerCase().includes('theme:wallpaper: fail') || data.line.toLowerCase().includes('theme:wallpaper: skip')) {
+          hideWaitingOverlay();
+          showStatusToast(data.line);
+        } else {
+          // general status: show briefly
+          showStatusToast(data.line, 3000);
+        }
+      }
+    } catch (e) { console.warn('theme-status handler err', e); }
+  });
+}
+
+// Listen for explicit handshake JSON forwarded from main (ensures renderer sees needs_workshop immediately)
+if (window.themeEvents && typeof window.themeEvents.onHandshake === 'function') {
+  console.log('RENDERER: Registering onHandshake listener');
+  window.themeEvents.onHandshake((data) => {
+    try {
+      console.log('RENDERER: onHandshake callback fired with data:', data);
+      console.debug('theme-handshake', data);
+      try { showDebugBanner && showDebugBanner(`handshake: ${JSON.stringify(data)}`); } catch(e){}
+      if (data && data.needs_workshop) {
+        // show the same non-blocking in-UI prompt used by applyTheme
+        const existing = document.getElementById('workshop-prompt');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'workshop-prompt';
+        overlay.style.position = 'fixed';
+        overlay.style.left = '0';
+        overlay.style.right = '0';
+        overlay.style.top = '0';
+        overlay.style.display = 'flex';
+        overlay.style.justifyContent = 'center';
+        overlay.style.zIndex = 10001;
+        overlay.style.pointerEvents = 'none';
+        const panel = document.createElement('div');
+        panel.style.pointerEvents = 'auto';
+        panel.style.margin = '12px';
+        panel.style.background = 'linear-gradient(180deg, rgba(16,16,24,0.95), rgba(8,8,12,0.95))';
+        panel.style.color = '#fff';
+        panel.style.padding = '12px 16px';
+        panel.style.borderRadius = '8px';
+        panel.style.boxShadow = '0 8px 24px rgba(0,0,0,0.6)';
+        const msg = document.createElement('div');
+        msg.textContent = 'This sub-theme requires a Wallpaper Engine workshop item which is not installed.';
+        const btnRow = document.createElement('div');
+        btnRow.style.marginTop = '8px';
+        btnRow.style.display = 'flex';
+        btnRow.style.gap = '8px';
+        const openBtn = document.createElement('button');
+        openBtn.textContent = 'Open Steam';
+        openBtn.className = 'subtheme-apply-btn';
+        const declineBtn = document.createElement('button');
+        declineBtn.textContent = 'Decline';
+        declineBtn.className = 'subtheme-apply-btn';
+        declineBtn.style.background = 'linear-gradient(180deg,#555,#333)';
+        btnRow.appendChild(openBtn);
+        btnRow.appendChild(declineBtn);
+        panel.appendChild(msg);
+        panel.appendChild(btnRow);
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+        console.log('RENDERER: Overlay created and added to DOM');
+
+        openBtn.addEventListener('click', async () => {
+          try { await window.themeAPI.openExternal(data.steam_url || data.steamUrl || data.link); } catch (e) { console.warn('openExternal failed', e); }
+          const watch = await window.themeAPI.watchWorkshop(data.workshop_id || data.workshopId, data.theme, data.sub || '');
+          if (watch && watch.id) {
+            showWaitingOverlay(`Waiting for workshop item ${data.workshop_id || data.workshopId} to appear...`);
+          }
+          overlay.remove();
+        });
+
+        declineBtn.addEventListener('click', async () => {
+          try { await window.themeAPI.markSkipWorkshop(data.theme, data.sub || ''); } catch (e) {}
+          try {
+            const dm = await window.themeAPI.disableSubWallpaper(data.theme, data.sub || '');
+            if (dm && dm.ok) { showStatusToast('Wallpaper disabled for this sub-theme'); }
+            else { showStatusToast('Preference saved (skip file). Failed to update manifest'); }
+          } catch (e) { console.warn('disableSubWallpaper failed', e); showStatusToast('Preference saved (skip file)'); }
+          overlay.remove();
+        });
+      }
+    } catch (e) { console.warn('theme-handshake handler err', e); }
+  });
+}
+
+function showStatusToast(text, timeout=5000) {
+  let t = document.getElementById('theme-status-toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'theme-status-toast';
+    t.style.position = 'fixed';
+    t.style.right = '12px';
+    t.style.bottom = '12px';
+    t.style.background = 'rgba(16,16,24,0.92)';
+    t.style.color = '#fff';
+    t.style.padding = '10px 14px';
+    t.style.borderRadius = '8px';
+    t.style.boxShadow = '0 6px 18px rgba(0,0,0,0.6)';
+    t.style.zIndex = '10000';
+    t.style.fontFamily = 'Segoe UI, system-ui, Arial';
+    t.style.fontSize = '13px';
+    document.body.appendChild(t);
+  }
+  t.textContent = text;
+  t.style.opacity = '1';
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(()=>{ try { t.style.opacity='0'; } catch(e){} }, timeout);
+}
+
+// Handle settings-missing signal to prompt user to configure WE paths
+if (window.themeEvents && typeof window.themeEvents.onSettingsMissing === 'function') {
+  window.themeEvents.onSettingsMissing(async (info) => {
+  console.debug('settings-missing', info);
+  const proceed = confirm('Wallpaper Engine settings appear missing or invalid. Open settings to configure now?');
+  if (!proceed) return;
+  // simple flow: ask user to select Steam "steamapps" folder
+  const folder = await window.themeAPI.selectFolder();
+  if (!folder) return alert('No folder selected');
+  // Expect user to select the parent folder that contains \steamapps
+  // Build settings assuming user selected either the steamapps folder or the Steam library root
+  const settings = {};
+  if (folder.toLowerCase().endsWith('steamapps')) {
+    settings.WE_Workshop = pathJoin(folder, 'workshop', 'content', '431960');
+    settings.WE_Exe = pathJoin(folder, 'common', 'wallpaper_engine', 'wallpaper64.exe');
+  } else {
+    // assume user selected the Steam library folder (parent of 'steamapps')
+    settings.WE_Workshop = pathJoin(folder, 'steamapps', 'workshop', 'content', '431960');
+    settings.WE_Exe = pathJoin(folder, 'steamapps', 'common', 'wallpaper_engine', 'wallpaper64.exe');
+  }
+  await window.themeAPI.setSettings(settings);
+  alert('Settings saved. If Wallpaper Engine files are present the selector will now detect them.');
+});
+}
+
+// small helpers used above
+function pathJoin() { return Array.from(arguments).join('\\'); }
 
 // Cycle button handler
 if (cycleBtn) {
@@ -305,4 +518,32 @@ if (applyBtn) {
     }
     applyTheme(selectedTheme);
   });
+}
+
+// Temporary debug banner to make incoming events visible in the UI without opening DevTools
+function showDebugBanner(text) {
+  try {
+    let b = document.getElementById('debug-banner');
+    if (!b) {
+      b = document.createElement('div');
+      b.id = 'debug-banner';
+      b.style.position = 'fixed';
+      b.style.left = '12px';
+      b.style.top = '12px';
+      b.style.background = 'rgba(0,0,0,0.72)';
+      b.style.color = '#fff';
+      b.style.padding = '8px 10px';
+      b.style.borderRadius = '6px';
+      b.style.zIndex = '11000';
+      b.style.fontSize = '12px';
+      b.style.maxWidth = '60vw';
+      b.style.overflow = 'hidden';
+      b.style.textOverflow = 'ellipsis';
+      b.style.whiteSpace = 'nowrap';
+      document.body.appendChild(b);
+    }
+    b.textContent = text;
+    clearTimeout(b._hideTimer);
+    b._hideTimer = setTimeout(()=>{ try { b.textContent = ''; } catch(e){} }, 15000);
+  } catch (e) { console.warn('showDebugBanner error', e); }
 }

@@ -1,34 +1,50 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// Expose async APIs that call the main process. Main performs filesystem IO.
-contextBridge.exposeInMainWorld('themeAPI', {
+// Consolidated safe exposures for renderer
+const themeAPI = {
+  // core actions (invoke on main)
   applyTheme: (themeName) => ipcRenderer.invoke('apply-theme', themeName),
   cycleTheme: () => ipcRenderer.invoke('cycle-theme'),
   getThemes: () => ipcRenderer.invoke('get-themes'),
   getPreviewPaths: (themeName) => ipcRenderer.invoke('get-preview-paths', themeName),
-  listSubThemes: (themeName) => ipcRenderer.invoke('list-subthemes', themeName)
-});
+  listSubThemes: (themeName) => ipcRenderer.invoke('list-subthemes', themeName),
 
-// Also expose the same under themeAPIAsync for backward compatibility with earlier code
+  // settings + workshop helpers
+  getSettings: () => ipcRenderer.invoke('get-settings'),
+  setSettings: (obj) => ipcRenderer.invoke('set-settings', obj),
+  selectFolder: () => ipcRenderer.invoke('select-folder'),
+  openExternal: (url) => ipcRenderer.invoke('open-external', url),
+  watchWorkshop: (workshopId, theme, sub) => ipcRenderer.invoke('watch-workshop', workshopId, theme, sub),
+  cancelWatch: (watchId) => ipcRenderer.invoke('cancel-watch', watchId),
+  markSkipWorkshop: (theme, sub) => ipcRenderer.invoke('mark-skip-workshop', theme, sub),
+  disableSubWallpaper: (theme, sub) => ipcRenderer.invoke('disable-sub-wallpaper', theme, sub),
+  enableSubWallpaper: (theme, sub) => ipcRenderer.invoke('enable-sub-wallpaper', theme, sub),
+
+  // convenience
+  showSelector: () => ipcRenderer.invoke('show-selector')
+};
+
+// Event subscriptions (renderer provides callbacks)
+const onWorkshopFound = (cb) => ipcRenderer.on('workshop-found', (e, data) => cb(data));
+const onSettingsMissing = (cb) => ipcRenderer.on('settings-missing', (e, data) => cb(data));
+const onHandshake = (cb) => ipcRenderer.on('theme-handshake', (e, data) => cb(data));
+
+// Expose the consolidated APIs to the renderer
+contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('themeAPIAsync', {
   getThemes: () => ipcRenderer.invoke('get-themes'),
   getPreviewPaths: (themeName) => ipcRenderer.invoke('get-preview-paths', themeName)
 });
-
-// diagnostic ping
-contextBridge.exposeInMainWorld('diagnostics', {
-  ping: () => ipcRenderer.invoke('ping')
-});
-
-// Open theme page (delegates to main process)
-// Expose window-level helpers for theme window navigation
-const _themeWindow = {
+contextBridge.exposeInMainWorld('diagnostics', { ping: () => ipcRenderer.invoke('ping') });
+contextBridge.exposeInMainWorld('themeWindow', {
   openThemePage: (themeName) => ipcRenderer.invoke('open-theme-page', themeName),
   showSelector: () => ipcRenderer.invoke('show-selector')
-};
-contextBridge.exposeInMainWorld('themeWindow', _themeWindow);
+});
 
-// Also provide showSelector on themeAPI as a convenience so code can call either
-contextBridge.exposeInMainWorld('themeAPI', Object.assign({}, globalThis.themeAPI || {}, {
-  showSelector: () => ipcRenderer.invoke('show-selector')
-}));
+// Also expose event registration functions
+contextBridge.exposeInMainWorld('themeEvents', {
+  onWorkshopFound,
+  onSettingsMissing,
+  onThemeStatus: (cb) => ipcRenderer.on('theme-status', (e, data) => cb(data)),
+  onHandshake
+});

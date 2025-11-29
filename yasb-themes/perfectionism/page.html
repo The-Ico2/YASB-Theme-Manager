@@ -488,6 +488,33 @@ html, body {
             applyBtn.disabled=false; applyBtn.textContent='Enable';
           });
           card.appendChild(applyBtn);
+          // If the manifest indicates the provided wallpaper was disabled, show a re-enable control
+          try {
+            if (s.manifest && s.manifest['skip-provided-wallpaper']) {
+              const reBtn = document.createElement('button');
+              reBtn.className = 'subtheme-apply-btn';
+              reBtn.style.marginLeft = '8px';
+              reBtn.textContent = 'Re-enable Wallpaper';
+              reBtn.addEventListener('click', async () => {
+                reBtn.disabled = true; reBtn.textContent = 'Re-enabling...';
+                try {
+                  const r = await window.themeAPI.enableSubWallpaper(theme, s.name);
+                  if (r && r.ok) {
+                    alert('Provided wallpaper re-enabled for ' + s.name + '.');
+                    reBtn.remove();
+                  } else {
+                    alert('Failed to re-enable wallpaper: ' + (r && r.error ? r.error : 'unknown'));
+                    reBtn.disabled = false; reBtn.textContent = 'Re-enable Wallpaper';
+                  }
+                } catch (err) {
+                  console.warn('enableSubWallpaper failed', err);
+                  alert('Failed to re-enable wallpaper: ' + err);
+                  reBtn.disabled = false; reBtn.textContent = 'Re-enable Wallpaper';
+                }
+              });
+              card.appendChild(reBtn);
+            }
+          } catch (e) { console.warn('render re-enable button error', e); }
           try{ const p=await window.themeAPI.getPreviewPaths(`${theme}/${s.name}`)||[]; if(p.length) pimg.src=p[0]; else pimg.src=''; }catch(e){pimg.src='';}
           grid.appendChild(card);
         }

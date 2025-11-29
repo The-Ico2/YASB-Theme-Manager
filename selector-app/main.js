@@ -1,7 +1,7 @@
-const { app, BrowserWindow, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, Menu, dialog, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { exec } = require('child_process');
+const { exec, spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 
 function createWindow() {
@@ -15,11 +15,23 @@ function createWindow() {
     }
   });
   // Remove the default application menu (File/Edit/View/Window/Help)
-  try { Menu.setApplicationMenu(null); } catch (e) { console.warn('Failed to remove app menu', e); }
+  // try { Menu.setApplicationMenu(null); } catch (e) { console.warn('Failed to remove app menu', e); }
 
   // Hide the menu bar on Windows/Linux so Alt won't reveal the menu unexpectedly
-  try { win.setMenuBarVisibility(false); win.setAutoHideMenuBar(true); } catch (e) {}
+  // try { win.setMenuBarVisibility(true); win.setAutoHideMenuBar(false); } catch (e) {}
   win.loadFile('index.html');
+  // After the page loads, send current settings so renderer can open settings UI if needed
+  win.webContents.once('did-finish-load', () => {
+    try {
+      const settings = readSettings();
+      // validate basic settings
+      const okExe = settings && settings.WE_Exe && fs.existsSync(settings.WE_Exe);
+      const okWorkshop = settings && settings.WE_Workshop && fs.existsSync(settings.WE_Workshop);
+      if (!okExe || !okWorkshop) {
+        win.webContents.send('settings-missing', { okExe: !!okExe, okWorkshop: !!okWorkshop, settings });
+      }
+    } catch (e) { console.warn('settings check failed', e); }
+  });
 }
 
 app.whenReady().then(createWindow);
@@ -34,28 +46,286 @@ console.log('process.execPath:', process.execPath);
 ipcMain.handle('apply-theme', async (event, themeName) => {
   const psPath = path.join(__dirname, '..', 'theme.ps1');
   // use --select to pick a specific theme
-  const cmd = `powershell -ExecutionPolicy Bypass -File "${psPath}" --select "${themeName}"`;
+  const args = ['-ExecutionPolicy', 'Bypass', '-File', psPath, '--select', themeName];
+
   return new Promise((resolve, reject) => {
-    exec(cmd, (error, stdout, stderr) => {
-      // try to parse special JSON response indicating sub-theme selection required
+    const child = spawn('powershell', args, { windowsHide: true });
+    let stdout = '';
+    let stderr = '';
+    let resolved = false;
+
+    // helper to attempt resolving from a JSON string
+    const tryResolveJson = (text) => {
+      const t = text && text.trim();
+      if (!t) return false;
+      // find first substring that looks like a JSON object (starts with '{')
+      const idx = t.indexOf('{');
+      if (idx >= 0) {
+        const candidate = t.substring(idx);
+        try {
+          const parsed = JSON.parse(candidate);
+          if (parsed && (parsed.needs_sub || parsed.needs_workshop)) {
+            resolved = true;
+            try { event && event.sender && event.sender.send('theme-status', { theme: themeName, line: candidate }); } catch (e) {}
+            resolve(parsed);
+            return true;
+          }
+        } catch (e) {
+          // not valid JSON yet; ignore
+        }
+      }
+      return false;
+    };
+
+    // send streaming lines to renderer as they arrive and look for JSON handshake lines
+    child.stdout.on('data', (chunk) => {
+      const s = String(chunk);
+      stdout += s;
+      // attempt to parse JSON handshake from the accumulated stdout (handles split chunks)
+      if (!resolved) {
+        try {
+          const idx = stdout.indexOf('{');
+          if (idx >= 0) {
+            const candidate = stdout.substring(idx).trim();
+            try {
+              const parsed = JSON.parse(candidate);
+              if (parsed && (parsed.needs_sub || parsed.needs_workshop)) {
+                resolved = true;
+                console.log('apply-theme: detected handshake JSON for', themeName, parsed);
+                try { event && event.sender && event.sender.send('theme-status', { theme: themeName, line: candidate }); } catch (e) {}
+                if (parsed && parsed.needs_workshop && parsed.workshop_id) {
+                  try {
+                    let settings = readSettings();
+                    let workshopRoot = settings && settings.WE_Workshop ? settings.WE_Workshop : null;
+                    
+                    // If workshop path not configured, try auto-detect
+                    if (!workshopRoot || !fs.existsSync(workshopRoot)) {
+                      console.log('apply-theme: workshop path not configured or invalid, attempting auto-detect');
+                      const detected = autoDetectSteamPaths();
+                      if (detected && detected.WE_Workshop) {
+                        workshopRoot = detected.WE_Workshop;
+                        writeSettings(detected);
+                        console.log('apply-theme: auto-detected and saved workshop path:', workshopRoot);
+                      }
+                    }
+                    
+                    const candidateFolder = workshopRoot ? path.join(workshopRoot, String(parsed.workshop_id)) : null;
+                    console.log('apply-theme: checking workshop item at', candidateFolder);
+                    
+                    if (candidateFolder && fs.existsSync(candidateFolder)) {
+                      console.log('apply-theme: workshop item FOUND at', candidateFolder);
+                      try { event && event.sender && event.sender.send('workshop-found', { workshopId: parsed.workshop_id, theme: parsed.theme, sub: parsed.sub, folder: candidateFolder }); } catch (e) {}
+                      try { event && event.sender && event.sender.send('theme-status', { theme: parsed.theme, sub: parsed.sub, line: `workshop: found at ${candidateFolder}` }); } catch (e) {}
+                      resolve(parsed);
+                      return;
+                    } else {
+                      console.log('apply-theme: workshop item NOT FOUND, will prompt user');
+                    }
+                  } catch (e) { console.warn('apply-theme: workshop existence check failed', e); }
+                }
+                // forward a specific handshake event so the renderer can react immediately
+                console.log('apply-theme: sending theme-handshake event to renderer');
+                try { event && event.sender && event.sender.send('theme-handshake', parsed); } catch (e) { console.error('Failed to send theme-handshake', e); }
+                // Resolve with a minimal acknowledgement so the promise completes
+                // The actual UI handling is done by the event listener in renderer
+                resolve({ handshake_sent: true, type: parsed.needs_sub ? 'needs_sub' : 'needs_workshop' });
+                return;
+              }
+            } catch (e) { /* not complete JSON yet, continue */ }
+          }
+        } catch (e) { /* ignore */ }
+      }
+
+      const lines = s.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+      for (const line of lines) {
+        try { event && event.sender && event.sender.send('theme-status', { theme: themeName, line }); } catch (e) {}
+      }
+    });
+    child.stderr.on('data', (chunk) => { stderr += String(chunk); });
+
+    child.on('error', (err) => { if (!resolved) reject(err.message || String(err)); });
+    child.on('close', (code) => {
+      if (resolved) return; // already resolved via JSON handshake
+      // try to parse the full stdout as JSON handshake first
       try {
         const trimmed = stdout && stdout.trim();
-        if (trimmed && trimmed.startsWith('{') && trimmed.includes('needs_sub')) {
-          const parsed = JSON.parse(trimmed);
-          resolve(parsed);
-          return;
+        if (trimmed) {
+          // attempt to locate a JSON object within the trimmed output
+          const idx = trimmed.indexOf('{');
+          if (idx >= 0) {
+            const candidate = trimmed.substring(idx);
+            const parsed = JSON.parse(candidate);
+            if (parsed && (parsed.needs_sub || parsed.needs_workshop)) {
+              // If needs_workshop, check whether workshop folder already exists:
+              if (parsed.needs_workshop && parsed.workshop_id) {
+                try {
+                  let settings = readSettings();
+                  let workshopRoot = settings && settings.WE_Workshop ? settings.WE_Workshop : null;
+                  
+                  if (!workshopRoot || !fs.existsSync(workshopRoot)) {
+                    const detected = autoDetectSteamPaths();
+                    if (detected && detected.WE_Workshop) {
+                      workshopRoot = detected.WE_Workshop;
+                      writeSettings(detected);
+                    }
+                  }
+                  
+                  const candidateFolder = workshopRoot ? path.join(workshopRoot, String(parsed.workshop_id)) : null;
+                  console.log('apply-theme (on-close): checking workshop item at', candidateFolder);
+                  
+                  if (candidateFolder && fs.existsSync(candidateFolder)) {
+                    console.log('apply-theme (on-close): workshop item FOUND');
+                    try { event && event.sender && event.sender.send('workshop-found', { workshopId: parsed.workshop_id, theme: parsed.theme, sub: parsed.sub, folder: candidateFolder }); } catch (e) {}
+                    try { event && event.sender && event.sender.send('theme-status', { theme: parsed.theme, sub: parsed.sub, line: `workshop: found at ${candidateFolder}` }); } catch (e) {}
+                    resolve(parsed); return;
+                  } else {
+                    console.log('apply-theme (on-close): workshop item NOT FOUND');
+                  }
+                } catch (e) { console.warn('apply-theme (on-close): workshop existence check failed', e); }
+              }
+              // notify renderer of the handshake as well
+              console.log('apply-theme (on-close): sending theme-handshake event to renderer');
+              try { event && event.sender && event.sender.send('theme-handshake', parsed); } catch (e) { console.error('Failed to send theme-handshake (on-close)', e); }
+              resolve({ handshake_sent: true, type: parsed.needs_sub ? 'needs_sub' : 'needs_workshop' });
+              return;
+            }
+          }
         }
       } catch (e) {
         // ignore parse errors
       }
 
-      if (error) {
-        reject(stderr || error.message);
+      if (code !== 0) {
+        const errMsg = stderr || `process exited ${code}`;
+        reject(errMsg);
       } else {
         resolve({ ok: true, output: stdout });
       }
     });
   });
+});
+
+// Helper to auto-detect Steam workshop paths from common locations
+function autoDetectSteamPaths() {
+  const candidates = [
+    'C:\\Program Files (x86)\\Steam\\steamapps',
+    'D:\\Games\\SteamLibrary\\steamapps',
+    'E:\\SteamLibrary\\steamapps',
+    'F:\\SteamLibrary\\steamapps',
+    'D:\\Steam\\steamapps',
+    'E:\\Steam\\steamapps'
+  ];
+  
+  for (const steamapps of candidates) {
+    try {
+      if (!fs.existsSync(steamapps)) continue;
+      const workshop = path.join(steamapps, 'workshop', 'content', '431960');
+      const exe = path.join(steamapps, 'common', 'wallpaper_engine', 'wallpaper64.exe');
+      if (fs.existsSync(workshop) && fs.existsSync(exe)) {
+        console.log('Auto-detected Steam paths:', { WE_Workshop: workshop, WE_Exe: exe });
+        return { WE_Workshop: workshop, WE_Exe: exe };
+      }
+    } catch (e) { /* skip */ }
+  }
+  return null;
+}
+
+// Simple settings storage (JSON file next to root)
+const SETTINGS_PATH = path.join(__dirname, '..', 'settings.json');
+function readSettings() {
+  try {
+    if (!fs.existsSync(SETTINGS_PATH)) {
+      // Try auto-detect on first read
+      const detected = autoDetectSteamPaths();
+      if (detected) {
+        writeSettings(detected);
+        return detected;
+      }
+      return {};
+    }
+    const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
+    return JSON.parse(raw || '{}');
+  } catch (e) { return {}; }
+}
+function writeSettings(obj) {
+  try {
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(obj, null, 2), 'utf8');
+    return true;
+  } catch (e) { console.warn('Failed to write settings', e); return false; }
+}
+
+// Expose settings read/write and folder/select helpers
+ipcMain.handle('get-settings', () => readSettings());
+ipcMain.handle('set-settings', (event, obj) => writeSettings(obj));
+ipcMain.handle('select-folder', async () => {
+  const res = await dialog.showOpenDialog({ properties: ['openDirectory'] });
+  if (res.canceled) return null; return res.filePaths[0];
+});
+ipcMain.handle('open-external', async (event, url) => { try { await shell.openExternal(url); return true; } catch { return false; } });
+
+// Workshop watch map
+const _watchers = new Map();
+let _watchIdCounter = 1;
+ipcMain.handle('watch-workshop', (event, workshopId, theme, sub) => {
+  const settings = readSettings();
+  const workshopRoot = settings && settings.WE_Workshop ? settings.WE_Workshop : null;
+  if (!workshopRoot) return { error: 'no workshop root configured' };
+  const targetFolder = path.join(workshopRoot, String(workshopId));
+  const id = String(_watchIdCounter++);
+  const webContents = event.sender;
+  const interval = setInterval(() => {
+    if (fs.existsSync(targetFolder)) {
+      clearInterval(interval);
+      _watchers.delete(id);
+      // notify renderer
+      try { webContents.send('workshop-found', { workshopId, theme, sub, folder: targetFolder }); } catch (e) {}
+      // trigger theme apply and stream status back to renderer
+      try {
+        const psPath = path.join(__dirname, '..', 'theme.ps1');
+        const sel = `${theme}/${sub}`;
+        const args = ['-ExecutionPolicy','Bypass','-File', psPath, '--select', sel];
+        const c = spawn('powershell', args, { windowsHide: true });
+        c.stdout.on('data', (chunk) => {
+          const s = String(chunk);
+          // if the child emits a handshake JSON line, forward it as theme-status too
+          const idx = s.indexOf('{');
+          if (idx >= 0) {
+            const candidate = s.substring(idx).trim();
+            try {
+              const parsed = JSON.parse(candidate);
+              if (parsed) {
+                webContents.send('theme-status', { theme, sub, line: candidate });
+                if (parsed && (parsed.needs_sub || parsed.needs_workshop)) {
+                  try { webContents.send('theme-handshake', parsed); } catch (e) {}
+                }
+              }
+            } catch (e) { }
+          }
+          const lines = s.split(/\r?\n/).map(l=>l.trim()).filter(l=>l.length>0);
+          for (const line of lines) {
+            try { webContents.send('theme-status', { theme, sub, line }); } catch (e) {}
+          }
+        });
+        c.stderr.on('data', () => {});
+        c.on('close', () => {});
+      } catch (e) { /* ignore */ }
+    }
+  }, 2000);
+  _watchers.set(id, interval);
+  return { id };
+});
+
+ipcMain.handle('cancel-watch', (event, watchId) => {
+  if (_watchers.has(watchId)) { clearInterval(_watchers.get(watchId)); _watchers.delete(watchId); return true; }
+  return false;
+});
+
+ipcMain.handle('mark-skip-workshop', (event, theme, sub) => {
+  const root = path.join(__dirname, '..');
+  const userStateDir = path.join(root, 'user-state');
+  try { if (!fs.existsSync(userStateDir)) fs.mkdirSync(userStateDir, { recursive: true }); } catch {}
+  const skipFile = path.join(userStateDir, `${theme}---${sub}---skip-workshop.txt`);
+  try { fs.writeFileSync(skipFile, `skipped:${new Date().toISOString()}`, 'utf8'); return true; } catch { return false; }
 });
 
 ipcMain.handle('cycle-theme', async () => {
@@ -75,6 +345,7 @@ ipcMain.handle('cycle-theme', async () => {
 // Discover themes by scanning both legacy `themes/` and `yasb-themes/*/sub-themes/*`
 ipcMain.handle('get-themes', async () => {
   try {
+    console.debug('get-themes invoked from renderer');
     const themesDir = path.join(__dirname, '..', 'themes');
     const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
     console.debug('get-themes: scanning', themesDir, yasbThemesDir);
@@ -172,6 +443,7 @@ ipcMain.handle('get-themes', async () => {
 
     return out;
   } catch (e) {
+    console.error('get-themes error:', e && e.stack ? e.stack : e);
     return { error: e.message };
   }
 });
@@ -367,5 +639,38 @@ ipcMain.handle('list-subthemes', async (event, themeName) => {
     return out;
   } catch (e) {
     return { error: e.message };
+  }
+});
+
+// Mark sub-theme manifest to disable provided wallpaper permanently
+ipcMain.handle('disable-sub-wallpaper', (event, theme, sub) => {
+  try {
+    const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
+    const manifestPath = path.join(yasbThemesDir, theme, 'sub-themes', sub, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) return { error: 'manifest not found' };
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    let parsed = {};
+    try { parsed = JSON.parse(raw); } catch (e) { parsed = {}; }
+    parsed['skip-provided-wallpaper'] = true;
+    fs.writeFileSync(manifestPath, JSON.stringify(parsed, null, 2), 'utf8');
+    return { ok: true };
+  } catch (e) {
+    return { error: e && e.message ? e.message : String(e) };
+  }
+});
+
+ipcMain.handle('enable-sub-wallpaper', (event, theme, sub) => {
+  try {
+    const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
+    const manifestPath = path.join(yasbThemesDir, theme, 'sub-themes', sub, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) return { error: 'manifest not found' };
+    const raw = fs.readFileSync(manifestPath, 'utf8');
+    let parsed = {};
+    try { parsed = JSON.parse(raw); } catch (e) { parsed = {}; }
+    if (parsed.hasOwnProperty('skip-provided-wallpaper')) { delete parsed['skip-provided-wallpaper']; }
+    fs.writeFileSync(manifestPath, JSON.stringify(parsed, null, 2), 'utf8');
+    return { ok: true };
+  } catch (e) {
+    return { error: e && e.message ? e.message : String(e) };
   }
 });
