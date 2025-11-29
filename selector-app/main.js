@@ -860,3 +860,51 @@ ipcMain.handle('write-subtheme-manifest', (event, theme, sub, manifest) => {
     return { error: e && e.message ? e.message : String(e) };
   }
 });
+
+// Reload theme if it's currently active
+ipcMain.handle('reload-if-active', async (event, theme, sub) => {
+  try {
+    const stateFile = path.join(__dirname, '..', 'theme.current_status');
+    const stateSubFile = path.join(__dirname, '..', 'subtheme.current_status');
+    
+    // Check if the theme/sub is currently active
+    let currentTheme = '';
+    let currentSub = '';
+    
+    if (fs.existsSync(stateFile)) {
+      currentTheme = fs.readFileSync(stateFile, 'utf8').trim();
+    }
+    
+    if (fs.existsSync(stateSubFile)) {
+      currentSub = fs.readFileSync(stateSubFile, 'utf8').trim();
+    }
+    
+    // If this is the active theme, re-apply it
+    if (currentTheme === theme && currentSub === sub) {
+      console.log('Reloading active theme:', theme, '/', sub);
+      
+      // Call theme.ps1 to re-apply
+      const psPath = path.join(__dirname, '..', 'theme.ps1');
+      const args = ['-ExecutionPolicy', 'Bypass', '-File', psPath, '--select', `${theme}/${sub}`];
+      
+      return new Promise((resolve) => {
+        const child = spawn('powershell', args, { windowsHide: true });
+        
+        child.on('close', (code) => {
+          console.log('Theme reload completed with code:', code);
+          resolve({ reloaded: true });
+        });
+        
+        child.on('error', (err) => {
+          console.error('Theme reload error:', err);
+          resolve({ reloaded: false, error: err.message });
+        });
+      });
+    }
+    
+    return { reloaded: false };
+  } catch (e) {
+    console.error('reload-if-active error:', e);
+    return { reloaded: false, error: e && e.message ? e.message : String(e) };
+  }
+});

@@ -25,6 +25,7 @@ const themeAPI = {
   readSubThemeManifest: (theme, sub) => ipcRenderer.invoke('read-subtheme-manifest', theme, sub),
   writeThemeFile: (theme, filename, content) => ipcRenderer.invoke('write-theme-file', theme, filename, content),
   writeSubThemeManifest: (theme, sub, manifest) => ipcRenderer.invoke('write-subtheme-manifest', theme, sub, manifest),
+  reloadIfActive: (theme, sub) => ipcRenderer.invoke('reload-if-active', theme, sub),
 
   // convenience
   showSelector: () => ipcRenderer.invoke('show-selector')

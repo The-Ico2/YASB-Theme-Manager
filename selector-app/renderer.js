@@ -1794,6 +1794,21 @@ window.saveEditorChanges = async function() {
     // Update the manifest in state
     editorState.manifest = updates.manifest;
     
+    // Check if this is the currently active theme and reload it
+    try {
+      const reloadResult = await window.themeAPI.reloadIfActive(
+        editorState.selectedTheme,
+        editorState.selectedSub
+      );
+      
+      if (reloadResult && reloadResult.reloaded) {
+        showToast('Theme reloaded in YASB', 'success', 3);
+      }
+    } catch (e) {
+      console.warn('Failed to check/reload active theme:', e);
+      // Don't show error to user - save was successful, reload is just a bonus
+    }
+    
   } catch (e) {
     console.error('Save error:', e);
     showToast('Failed to save: ' + e.message, 'error');
