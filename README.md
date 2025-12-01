@@ -228,18 +228,61 @@ npm --prefix "C:\Users\<username>\.config\theme\selector-app" start
 
 ```json
 {
-  "neon-paradise": {
-    "root-variables": {
-      "bg-dark": "#070712",
-      "accent1": "#bc13fe",
-      "accent2": "#00dfff",
-      "accent3": "#ff67c6",
-      "text-main": "#e6e6ff"
-    },
-    "wallpaper-engine": {
-      // this section has been added but does not do anything yet
-    },
-    "preview-img": ["1.png", "2.png"]
+  "meta": {
+    "name": "NOexistenceN",
+    "version": "1.0.0"
+  },
+  "root-variables": {
+    "--accent1": "#f76d7b", 
+    "--accent2": "#ffffff",
+    "--accent3": "#8fb5e1",
+
+    "--text-light": "#e6e9ff",
+    "--text-gray": "#a8adc9",
+    "--text-dark": "#262d47",
+
+    "--glow1": "#e0aaffd8",
+    "--glow2": "#aafff4d8",
+    "--glow3": "#ffb3e6d8",
+
+    "--glow1-soft": "#e0aaff33",
+    "--glow2-soft": "#aafff433",
+    "--glow3-soft": "#ffb3e633",
+
+    "--bg-dark": "#0d102e",
+    "--bg-darker": "#06081a",
+
+    "--bg-panel": "#0d102e",
+    "--bg-surface": "#181636",
+    "--bg-surface-hover": "#262d47",
+    
+    "--bg-widget": "#181636",
+    "--bg-widget-hover": "#262d47",
+    "--bg-widget-active": "#423f4f",
+
+    "--text-accent1": "#f76d7b",
+    "--text-accent2": "#ffffff",
+    "--text-accent3": "#8fb5e1",
+
+    "--border-soft": "#262d47",
+    "--border-strong": "#423f4f",
+
+    "--shadow-strong": "#06081a",
+    "--shadow-glow1": "#f76d7b",
+    "--shadow-glow2": "#ffffff",
+    "--shadow-glow3": "#8fb5e1",
+
+    "--glass-1": "#181636",
+    "--glass-2": "#262d47",
+    "--glass-3": "#423f4f",
+
+    "--btn-hover": "#8fb5e1",
+    "--btn-active": "#f76d7b"
+  },
+  "wallpaper-engine": {
+    "enabled": true,
+    "file": "3408439088",
+    "link": "https://steamcommunity.com/sharedfiles/filedetails/?id=3408439088"
   }
 }
 ```
