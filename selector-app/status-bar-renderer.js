@@ -231,11 +231,11 @@ function renderWidget(name, config, rootVars) {
   if (type === 'yasb.clock.ClockWidget') {
     widget.innerHTML = `<span>⏰ ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}</span>`;
   } else if (type === 'yasb.cpu.CpuWidget') {
-    widget.innerHTML = `<span>${options.label || 'CPU'}</span><span style="color: ${rootVars['--accent2'] || '#00dfff'}">45%</span>`;
+    widget.innerHTML = `<span>${options.label || 'CPU'}</span><span style="color: ${rootVars['--accent2']}">45%</span>`;
   } else if (type === 'yasb.memory.MemoryWidget') {
-    widget.innerHTML = `<span>${options.label || 'MEM'}</span><span style="color: ${rootVars['--accent2'] || '#00dfff'}">62%</span>`;
+    widget.innerHTML = `<span>${options.label || 'MEM'}</span><span style="color: ${rootVars['--accent2']}">62%</span>`;
   } else if (type === 'yasb.gpu.GpuWidget') {
-    widget.innerHTML = `<span>${options.label || 'GPU'}</span><span style="color: ${rootVars['--accent2'] || '#00dfff'}">38%</span>`;
+    widget.innerHTML = `<span>${options.label || 'GPU'}</span><span style="color: ${rootVars['--accent2']}">38%</span>`;
   } else if (type === 'yasb.disk.DiskWidget') {
     widget.innerHTML = `<span>💾 ${options.volume_label || 'C'}</span>`;
   } else if (type === 'yasb.volume.VolumeWidget') {
