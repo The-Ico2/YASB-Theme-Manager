@@ -4,6 +4,26 @@ const fs = require('fs');
 const { exec, spawn } = require('child_process');
 const { pathToFileURL } = require('url');
 
+// Helper to send toast messages to renderer
+function sendToast(text, type = 'debug', duration = 4) {
+  const allWindows = BrowserWindow.getAllWindows();
+  if (allWindows.length > 0) {
+    for (const win of allWindows) {
+      if (win && win.webContents && !win.webContents.isDestroyed()) {
+        try {
+          win.webContents.send('sendMessage', {type, text, duration });
+        } catch (e) {
+          // Fallback to console if executeJavaScript fails
+          console.log(`[${type.toUpperCase()}] ${text}`);
+        }
+      }
+    }
+  } else {
+    // No window available, use console as fallback
+    console.log(`[${type.toUpperCase()}] ${text}`);
+  }
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 600,
@@ -24,30 +44,30 @@ function createWindow() {
   // Poll for workshop-prompt.json file every 2 seconds
   const checkWorkshopPrompt = () => {
     const promptFile = path.join(__dirname, '..', 'workshop-prompt.json');
-    console.log('main: Checking for workshop prompt file at:', promptFile, 'exists:', fs.existsSync(promptFile));
+    sendToast('main: Checking for workshop prompt file at: ' + promptFile + ', exists: ' + fs.existsSync(promptFile), 'debug');
     if (fs.existsSync(promptFile)) {
       try {
         const promptData = fs.readFileSync(promptFile, 'utf8');
         const workshopData = JSON.parse(promptData);
-        console.log('main: Found workshop prompt file with data:', workshopData);
+        sendToast('main: Found workshop prompt file with data: ' + JSON.stringify(workshopData), 'debug');
         
         // Delete the file so it's only processed once
         fs.unlinkSync(promptFile);
-        console.log('main: Deleted workshop prompt file');
+        sendToast('main: Deleted workshop prompt file', 'debug');
         
         // Send to renderer only if webContents is ready
         if (win && win.webContents && !win.webContents.isDestroyed()) {
-          console.log('main: Sending theme-handshake event to renderer');
+          sendToast('main: Sending theme-handshake event to renderer', 'debug');
           win.webContents.send('theme-handshake', workshopData);
           
           // Focus the window
           if (win.isMinimized()) win.restore();
           win.focus();
         } else {
-          console.warn('main: Window webContents not ready, cannot send event');
+          sendToast('main: Window webContents not ready, cannot send event', 'warn');
         }
       } catch (e) {
-        console.error('main: Failed to process workshop prompt file:', e);
+        sendToast('main: Failed to process workshop prompt file: ' + (e.message || e), 'error');
         try { fs.unlinkSync(promptFile); } catch {}
       }
     }
@@ -69,7 +89,7 @@ function createWindow() {
       
       // Check for workshop prompt file immediately on load
       checkWorkshopPrompt();
-    } catch (e) { console.warn('settings check failed', e); }
+    } catch (e) { sendToast('settings check failed: ' + (e.message || e), 'warn'); }
   });
   return win;
 }
@@ -77,10 +97,10 @@ function createWindow() {
 app.whenReady().then(createWindow);
 
 // Startup diagnostics
-console.log('Selector-app main starting');
-console.log('process.cwd():', process.cwd());
-console.log('__dirname:', __dirname);
-console.log('process.execPath:', process.execPath);
+sendToast('Selector-app main starting', 'debug');
+sendToast('process.cwd(): ' + process.cwd(), 'debug');
+sendToast('__dirname: ' + __dirname, 'debug');
+sendToast('process.execPath: ' + process.execPath, 'debug');
 
 // IPC handler: when renderer asks to apply a theme
 ipcMain.handle('apply-theme', async (event, themeName) => {
@@ -131,7 +151,7 @@ ipcMain.handle('apply-theme', async (event, themeName) => {
               const parsed = JSON.parse(candidate);
               if (parsed && (parsed.needs_sub || parsed.needs_workshop)) {
                 resolved = true;
-                console.log('apply-theme: detected handshake JSON for', themeName, parsed);
+                sendToast('apply-theme: detected handshake JSON for ' + themeName + ': ' + JSON.stringify(parsed), 'debug');
                 try { event && event.sender && event.sender.send('theme-status', { theme: themeName, line: candidate }); } catch (e) {}
                 if (parsed && parsed.needs_workshop && parsed.workshop_id) {
                   try {
@@ -140,32 +160,32 @@ ipcMain.handle('apply-theme', async (event, themeName) => {
                     
                     // If workshop path not configured, try auto-detect
                     if (!workshopRoot || !fs.existsSync(workshopRoot)) {
-                      console.log('apply-theme: workshop path not configured or invalid, attempting auto-detect');
+                      sendToast('apply-theme: workshop path not configured or invalid, attempting auto-detect', 'debug');
                       const detected = autoDetectSteamPaths();
                       if (detected && detected.WE_Workshop) {
                         workshopRoot = detected.WE_Workshop;
                         writeSettings(detected);
-                        console.log('apply-theme: auto-detected and saved workshop path:', workshopRoot);
+                        sendToast('apply-theme: auto-detected and saved workshop path: ' + workshopRoot, 'debug');
                       }
                     }
                     
                     const candidateFolder = workshopRoot ? path.join(workshopRoot, String(parsed.workshop_id)) : null;
-                    console.log('apply-theme: checking workshop item at', candidateFolder);
+                    sendToast('apply-theme: checking workshop item at ' + candidateFolder, 'debug');
                     
                     if (candidateFolder && fs.existsSync(candidateFolder)) {
-                      console.log('apply-theme: workshop item FOUND at', candidateFolder);
+                      sendToast('apply-theme: workshop item FOUND at ' + candidateFolder, 'debug');
                       try { event && event.sender && event.sender.send('workshop-found', { workshopId: parsed.workshop_id, theme: parsed.theme, sub: parsed.sub, folder: candidateFolder }); } catch (e) {}
                       try { event && event.sender && event.sender.send('theme-status', { theme: parsed.theme, sub: parsed.sub, line: `workshop: found at ${candidateFolder}` }); } catch (e) {}
                       resolve(parsed);
                       return;
                     } else {
-                      console.log('apply-theme: workshop item NOT FOUND, will prompt user');
+                      sendToast('apply-theme: workshop item NOT FOUND, will prompt user', 'debug');
                     }
-                  } catch (e) { console.warn('apply-theme: workshop existence check failed', e); }
+                  } catch (e) { sendToast('apply-theme: workshop existence check failed: ' + (e.message || e), 'warn'); }
                 }
                 // forward a specific handshake event so the renderer can react immediately
-                console.log('apply-theme: sending theme-handshake event to renderer');
-                try { event && event.sender && event.sender.send('theme-handshake', parsed); } catch (e) { console.error('Failed to send theme-handshake', e); }
+                sendToast('apply-theme: sending theme-handshake event to renderer', 'debug');
+                try { event && event.sender && event.sender.send('theme-handshake', parsed); } catch (e) { sendToast('Failed to send theme-handshake: ' + (e.message || e), 'error'); }
                 // Resolve with a minimal acknowledgement so the promise completes
                 // The actual UI handling is done by the event listener in renderer
                 resolve({ handshake_sent: true, type: parsed.needs_sub ? 'needs_sub' : 'needs_workshop' });
@@ -262,7 +282,7 @@ function autoDetectSteamPaths() {
       const workshop = path.join(steamapps, 'workshop', 'content', '431960');
       const exe = path.join(steamapps, 'common', 'wallpaper_engine', 'wallpaper64.exe');
       if (fs.existsSync(workshop) && fs.existsSync(exe)) {
-        console.log('Auto-detected Steam paths:', { WE_Workshop: workshop, WE_Exe: exe });
+        sendToast('Auto-detected Steam paths: ' + JSON.stringify({ WE_Workshop: workshop, WE_Exe: exe }), 'debug');
         return { WE_Workshop: workshop, WE_Exe: exe };
       }
     } catch (e) { /* skip */ }
@@ -291,7 +311,7 @@ function writeSettings(obj) {
   try {
     fs.writeFileSync(SETTINGS_PATH, JSON.stringify(obj, null, 2), 'utf8');
     return true;
-  } catch (e) { console.warn('Failed to write settings', e); return false; }
+  } catch (e) { sendToast('Failed to write settings: ' + (e.message || e), 'warn'); return false; }
 }
 
 // Expose settings read/write and folder/select helpers
@@ -389,10 +409,10 @@ ipcMain.handle('cycle-theme', async () => {
 // Discover themes by scanning both legacy `themes/` and `yasb-themes/*/sub-themes/*`
 ipcMain.handle('get-themes', async () => {
   try {
-    console.debug('get-themes invoked from renderer');
+    sendToast('get-themes invoked from renderer', 'debug');
     const themesDir = path.join(__dirname, '..', 'themes');
     const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
-    console.debug('get-themes: scanning', themesDir, yasbThemesDir);
+    sendToast('get-themes: scanning ' + themesDir + ', ' + yasbThemesDir, 'debug');
     const out = {};
 
     // legacy themes folder
@@ -626,7 +646,7 @@ ipcMain.handle('get-preview-paths', async (event, themeName) => {
 // Simple ping for diagnostics — returns some runtime info
 ipcMain.handle('ping', async () => {
   try {
-    console.log('get ping from renderer — main alive');
+    sendToast('get ping from renderer — main alive', 'debug');
     return { ok: true, cwd: process.cwd(), dirname: __dirname };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -708,7 +728,7 @@ app.on('activate', () => {
 });
 
 // Debug/logging: confirm handlers registered
-console.log('Selector-app: IPC handlers registered: get-themes, get-preview-paths, apply-theme, cycle-theme');
+sendToast('Selector-app: IPC handlers registered: get-themes, get-preview-paths, apply-theme, cycle-theme', 'debug');
 
 // Show main selector (index.html) in focused window
 ipcMain.handle('show-selector', async () => {
@@ -795,10 +815,10 @@ ipcMain.handle('enable-sub-wallpaper', (event, theme, sub) => {
     try {
       if (fs.existsSync(skipFile)) {
         fs.unlinkSync(skipFile);
-        console.log(`Deleted skip file: ${skipFile}`);
+        sendToast('Deleted skip file: ' + skipFile, 'debug');
       }
     } catch (e) {
-      console.warn('Failed to delete skip file:', e);
+      sendToast('Failed to delete skip file: ' + (e.message || e), 'warn');
     }
     
     fs.writeFileSync(manifestPath, JSON.stringify(parsed, null, 2), 'utf8');
@@ -887,7 +907,7 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
     const subThemeMatches = currentTheme === theme && currentSub === sub;
     
     if (majorThemeMatches || subThemeMatches) {
-      console.log('Active theme detected - applying updates directly to YASB');
+      sendToast('Active theme detected - applying updates directly to YASB', 'debug');
       
       const yasbConfigPath = path.join(process.env.USERPROFILE, '.config', 'yasb', 'config.yaml');
       const yasbStylePath = path.join(process.env.USERPROFILE, '.config', 'yasb', 'styles.css');
@@ -897,7 +917,7 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
       if (majorThemeMatches) {
         const sourceConfig = path.join(yasbThemesDir, theme, 'config.yaml');
         if (fs.existsSync(sourceConfig)) {
-          console.log('Updating YASB config.yaml widgets from', sourceConfig);
+          sendToast('Updating YASB config.yaml widgets from ' + sourceConfig, 'debug');
           
           // Read source config (from theme)
           const sourceContent = fs.readFileSync(sourceConfig, 'utf8');
@@ -1018,7 +1038,7 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
       if (subThemeMatches && sub) {
         const manifestPath = path.join(yasbThemesDir, theme, 'sub-themes', sub, 'manifest.json');
         if (fs.existsSync(manifestPath)) {
-          console.log('Updating YASB styles.css root variables from', manifestPath);
+          sendToast('Updating YASB styles.css root variables from ' + manifestPath, 'debug');
           
           // Read manifest to get updated root variables
           const manifestContent = fs.readFileSync(manifestPath, 'utf8');
@@ -1062,7 +1082,7 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
     
     return { reloaded: false };
   } catch (e) {
-    console.error('reload-if-active error:', e);
+    sendToast('reload-if-active error: ' + (e && e.message ? e.message : String(e)), 'error');
     return { reloaded: false, error: e && e.message ? e.message : String(e) };
   }
 });

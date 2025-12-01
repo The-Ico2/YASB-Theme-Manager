@@ -500,15 +500,15 @@ html, body {
                 try {
                   const r = await window.themeAPI.enableSubWallpaper(theme, s.name);
                   if (r && r.ok) {
-                    showToast('Provided wallpaper re-enabled for ' + s.name + '.', 'success');
+                    Utils.sendMessage('Provided wallpaper re-enabled for ' + s.name + '.', 'success');
                     reBtn.remove();
                   } else {
-                    showToast('Failed to re-enable wallpaper: ' + (r && r.error ? r.error : 'unknown'), 'error');
+                    Utils.sendMessage('Failed to re-enable wallpaper: ' + (r && r.error ? r.error : 'unknown'), 'error');
                     reBtn.disabled = false; reBtn.textContent = 'Re-enable Wallpaper';
                   }
                 } catch (err) {
                   console.warn('enableSubWallpaper failed', err);
-                  showToast('Failed to re-enable wallpaper: ' + err, 'error');
+                  Utils.sendMessage('Failed to re-enable wallpaper: ' + err, 'error');
                   reBtn.disabled = false; reBtn.textContent = 'Re-enable Wallpaper';
                 }
               });
@@ -595,10 +595,10 @@ html, body {
         }
         // if showSelector returned an error, warn but do not close the window
         console.warn('showSelector returned error', res && res.error);
-        showToast('Could not return to selector: ' + (res && res.error ? res.error : 'unknown error'), 'error');
+        Utils.sendMessage('Could not return to selector: ' + (res && res.error ? res.error : 'unknown error'), 'error');
       } catch (e) {
         console.warn('showSelector exception', e);
-        showToast('Could not return to selector: ' + e.message, 'error');
+        Utils.sendMessage('Could not return to selector: ' + e.message, 'error');
       }
     });
 
@@ -632,68 +632,6 @@ html, body {
     // --- Toast notification system ---
     const activeToasts = [];
     
-    function showToast(text, type = 'info', duration = 4) {
-      const chip = document.createElement('div');
-      chip.className = `msg-chip msg-${type}`;
-      chip.textContent = text;
-
-      const baseStyle = {
-        position: 'fixed',
-        right: '20px',
-        padding: '10px 15px',
-        borderRadius: '6px',
-        color: '#fff',
-        fontFamily: 'Inter, Segoe UI, sans-serif',
-        fontSize: '14px',
-        boxShadow: '0 2px 10px rgba(0,0,0,0.25)',
-        zIndex: '99999',
-        opacity: '0',
-        transition: 'opacity 0.25s ease, transform 0.25s ease',
-        transform: 'translateY(10px)'
-      };
-
-      const typeStyles = {
-        error: { backgroundColor: 'rgba(220,53,69,0.95)' },
-        warn: { backgroundColor: 'rgba(255,193,7,0.95)', color: '#222' },
-        warning: { backgroundColor: 'rgba(255,193,7,0.95)', color: '#222' },
-        success: { backgroundColor: 'rgba(40,167,69,0.95)' },
-        info: { backgroundColor: 'rgba(23,162,184,0.95)' },
-        debug: { backgroundColor: 'rgba(108,117,125,0.95)' }
-      };
-
-      Object.assign(chip.style, baseStyle, typeStyles[type] || typeStyles.info);
-
-      const spacing = 10;
-      let bottomOffset = 20;
-      activeToasts.forEach(c => {
-        bottomOffset += c.offsetHeight + spacing;
-      });
-      chip.style.bottom = bottomOffset + 'px';
-
-      document.body.appendChild(chip);
-      activeToasts.push(chip);
-
-      requestAnimationFrame(() => {
-        chip.style.opacity = '1';
-        chip.style.transform = 'translateY(0)';
-      });
-
-      setTimeout(() => {
-        chip.style.opacity = '0';
-        chip.style.transform = 'translateY(10px)';
-        chip.addEventListener('transitionend', () => {
-          chip.remove();
-          const index = activeToasts.indexOf(chip);
-          if (index !== -1) activeToasts.splice(index, 1);
-          let offset = 20;
-          activeToasts.forEach(c => {
-            c.style.bottom = offset + 'px';
-            offset += c.offsetHeight + spacing;
-          });
-        });
-      }, duration * 1000);
-    }
-
     // --- Listen for workshop handshake events ---
     if (window.themeEvents && typeof window.themeEvents.onHandshake === 'function') {
       console.log('page.html: Registering onHandshake listener');
@@ -767,9 +705,9 @@ html, body {
             try {
               await window.themeAPI.openExternal(steamUrl);
               overlay.remove();
-              showToast('Steam Workshop opened. Please subscribe and download the wallpaper.', 'info', 5);
+              Utils.sendMessage('Steam Workshop opened. Please subscribe and download the wallpaper.', 'info', 5);
             } catch (e) {
-              showToast('Failed to open Steam: ' + e, 'error');
+              Utils.sendMessage('Failed to open Steam: ' + e, 'error');
             }
           });
 
@@ -780,19 +718,19 @@ html, body {
               // Also disable in manifest permanently
               const result = await window.themeAPI.disableSubWallpaper(data.theme, data.sub || '');
               if (result && result.ok) {
-                showToast('Wallpaper permanently disabled for this sub-theme', 'success');
+                Utils.sendMessage('Wallpaper permanently disabled for this sub-theme', 'success');
               } else {
-                showToast('Wallpaper disabled (skip file created)', 'success');
+                Utils.sendMessage('Wallpaper disabled (skip file created)', 'success');
               }
             } catch (e) {
-              showToast('Failed to disable wallpaper: ' + e, 'error');
+              Utils.sendMessage('Failed to disable wallpaper: ' + e, 'error');
             }
             overlay.remove();
           });
 
           changeBtn.addEventListener('click', async () => {
             overlay.remove();
-            showToast('Custom wallpaper selection - Coming soon!', 'info');
+            Utils.sendMessage('Custom wallpaper selection - Coming soon!', 'info');
           });
 
           closeBtn.addEventListener('click', () => {
