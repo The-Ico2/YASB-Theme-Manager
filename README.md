@@ -293,7 +293,7 @@ npm --prefix "C:\Users\<username>\.config\theme\selector-app" start
 
 ## Scrollbars, Visuals & Theme Assets
 
-- Previews in `themes/<theme>/preview-img/`
+- Previews in `yasb-themes/<theme>/preview/`
 - Provide images locally for the script & Electron UI
 - Wallpaper Engine integration optional
 
