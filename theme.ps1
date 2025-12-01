@@ -85,6 +85,24 @@ function Get-SubThemeManifest($themeName, $subName) {
   try { return Get-Content $m -Raw | ConvertFrom-Json } catch { return $null }
 }
 
+function Get-MonitorCount {
+  try {
+    Add-Type -AssemblyName System.Windows.Forms
+    $screens = [System.Windows.Forms.Screen]::AllScreens
+    return $screens.Count
+  }
+  catch {
+    # Fallback: try using WMI
+    try {
+      $monitors = Get-WmiObject -Namespace root\wmi -Class WmiMonitorBasicDisplayParams -ErrorAction SilentlyContinue
+      if ($monitors) { return $monitors.Count }
+    }
+    catch { }
+    # Default to 1 if detection fails
+    return 1
+  }
+}
+
 if ($list) {
   Get-StatusThemes | ForEach-Object { Write-Output $_ }
   exit 0
@@ -368,10 +386,14 @@ function Set-StatusTheme($themeName, $subName) {
               if (-not (Test-Path $wpeExe)) { Write-Warning "Wallpaper Engine executable not found: $wpeExe"; Write-Output "theme:wallpaper: SKIP (no exe)" }
               else {
                 try {
-                  $args = @('-control', 'openWallpaper', '-file', "$projPath")
-                  $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
-                  $exit = $p.ExitCode
-                  if ($exit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $exit" }
+                  $monitorCount = Get-MonitorCount
+                  $lastExit = 0
+                  for ($i = 0; $i -lt $monitorCount; $i++) {
+                    $args = @('-control', 'openWallpaper', '-file', "$projPath", '-monitor', $i)
+                    $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                    $lastExit = $p.ExitCode
+                  }
+                  if ($lastExit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $lastExit" }
                 }
                 catch {
                   Write-Warning "Failed to run Wallpaper Engine: $_"
@@ -403,10 +425,14 @@ function Set-StatusTheme($themeName, $subName) {
             if (-not (Test-Path $wpeExe)) { Write-Warning "Wallpaper Engine executable not found: $wpeExe"; Write-Output "theme:wallpaper: SKIP (no exe)" }
             else {
               try {
-                $args = @('-control', 'openWallpaper', '-file', "$wallpath")
-                $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
-                $exit = $p.ExitCode
-                if ($exit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $exit" }
+                $monitorCount = Get-MonitorCount
+                $lastExit = 0
+                for ($i = 0; $i -lt $monitorCount; $i++) {
+                  $args = @('-control', 'openWallpaper', '-file', "$wallpath", '-monitor', $i)
+                  $p = Start-Process -FilePath $wpeExe -ArgumentList $args -NoNewWindow -Wait -PassThru -ErrorAction Stop
+                  $lastExit = $p.ExitCode
+                }
+                if ($lastExit -eq 0) { Write-Output "theme:wallpaper: OK" } else { Write-Warning "Wallpaper Engine returned $lastExit" }
               }
               catch { Write-Warning "Failed to run Wallpaper Engine: $_"; Write-Output "theme:wallpaper: FAIL" }
             }

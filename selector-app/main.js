@@ -870,6 +870,7 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
     // Check if the theme/sub is currently active
     let currentTheme = '';
     let currentSub = '';
+    let needsReload = false;
     
     if (fs.existsSync(stateFile)) {
       currentTheme = fs.readFileSync(stateFile, 'utf8').trim();
@@ -879,27 +880,184 @@ ipcMain.handle('reload-if-active', async (event, theme, sub) => {
       currentSub = fs.readFileSync(stateSubFile, 'utf8').trim();
     }
     
-    // If this is the active theme, re-apply it
-    if (currentTheme === theme && currentSub === sub) {
-      console.log('Reloading active theme:', theme, '/', sub);
+    // Check if major theme matches (for config.yaml updates)
+    const majorThemeMatches = currentTheme === theme;
+    
+    // Check if exact sub-theme matches (for manifest.json/root-variables updates)
+    const subThemeMatches = currentTheme === theme && currentSub === sub;
+    
+    if (majorThemeMatches || subThemeMatches) {
+      console.log('Active theme detected - applying updates directly to YASB');
       
-      // Call theme.ps1 to re-apply
-      const psPath = path.join(__dirname, '..', 'theme.ps1');
-      const args = ['-ExecutionPolicy', 'Bypass', '-File', psPath, '--select', `${theme}/${sub}`];
+      const yasbConfigPath = path.join(process.env.USERPROFILE, '.config', 'yasb', 'config.yaml');
+      const yasbStylePath = path.join(process.env.USERPROFILE, '.config', 'yasb', 'styles.css');
+      const yasbThemesDir = path.join(__dirname, '..', 'yasb-themes');
       
-      return new Promise((resolve) => {
-        const child = spawn('powershell', args, { windowsHide: true });
-        
-        child.on('close', (code) => {
-          console.log('Theme reload completed with code:', code);
-          resolve({ reloaded: true });
-        });
-        
-        child.on('error', (err) => {
-          console.error('Theme reload error:', err);
-          resolve({ reloaded: false, error: err.message });
-        });
-      });
+      // If major theme matches, update config.yaml widgets only
+      if (majorThemeMatches) {
+        const sourceConfig = path.join(yasbThemesDir, theme, 'config.yaml');
+        if (fs.existsSync(sourceConfig)) {
+          console.log('Updating YASB config.yaml widgets from', sourceConfig);
+          
+          // Read source config (from theme)
+          const sourceContent = fs.readFileSync(sourceConfig, 'utf8');
+          
+          // Read existing YASB config
+          let existingContent = '';
+          if (fs.existsSync(yasbConfigPath)) {
+            existingContent = fs.readFileSync(yasbConfigPath, 'utf8');
+          }
+          
+          // Parse source to extract widget lists per bar
+          const sourceLines = sourceContent.split('\n');
+          const sourceBars = {};
+          let currentBar = null;
+          let inWidgetsSection = false;
+          let currentPosition = '';
+          
+          for (const line of sourceLines) {
+            const barMatch = line.match(/^  ([\w-]+):/);
+            if (barMatch) {
+              currentBar = barMatch[1];
+              sourceBars[currentBar] = { left: [], center: [], right: [] };
+              inWidgetsSection = false;
+            }
+            
+            if (currentBar && line.match(/^    widgets:/)) {
+              inWidgetsSection = true;
+            }
+            
+            if (inWidgetsSection) {
+              const posMatch = line.match(/^      (left|center|right):/);
+              if (posMatch) {
+                currentPosition = posMatch[1];
+              }
+              
+              const widgetMatch = line.match(/^        - "([^"]+)"/);
+              if (widgetMatch && currentPosition) {
+                sourceBars[currentBar][currentPosition].push(widgetMatch[1]);
+              }
+            }
+          }
+          
+          // Now update existing config by replacing widget lists only
+          const existingLines = existingContent.split('\n');
+          const newLines = [];
+          let existingBar = null;
+          let inExistingWidgets = false;
+          let existingPosition = '';
+          let skipWidgets = false;
+          
+          for (let i = 0; i < existingLines.length; i++) {
+            const line = existingLines[i];
+            
+            const barMatch = line.match(/^  ([\w-]+):/);
+            if (barMatch) {
+              existingBar = barMatch[1];
+              inExistingWidgets = false;
+              skipWidgets = false;
+              newLines.push(line);
+              continue;
+            }
+            
+            if (existingBar && line.match(/^    widgets:/)) {
+              inExistingWidgets = true;
+              newLines.push(line);
+              
+              // Insert updated widget lists from source if we have them
+              if (sourceBars[existingBar]) {
+                for (const pos of ['left', 'center', 'right']) {
+                  newLines.push(`      ${pos}:`);
+                  for (const widget of sourceBars[existingBar][pos]) {
+                    newLines.push(`        - "${widget}"`);
+                  }
+                }
+                skipWidgets = true;
+              }
+              continue;
+            }
+            
+            // Skip old widget entries if we inserted new ones
+            if (skipWidgets && (line.match(/^      (left|center|right):/) || line.match(/^        - "/))) {
+              continue;
+            }
+            
+            // Reset skip when we exit widgets section
+            if (skipWidgets && line.match(/^  [a-z]/)) {
+              skipWidgets = false;
+              inExistingWidgets = false;
+            }
+            
+            newLines.push(line);
+          }
+          
+          const newContent = newLines.join('\n');
+          
+          // Also update widgets section from source
+          const sourceWidgetsMatch = sourceContent.match(/^widgets:\s*$(.*?)$/ms);
+          const sourceWidgets = sourceWidgetsMatch ? sourceWidgetsMatch[0] : '';
+          
+          let finalContent = newContent;
+          if (sourceWidgets) {
+            const existingWidgetsMatch = finalContent.match(/^widgets:\s*$(.*?)$/ms);
+            if (existingWidgetsMatch) {
+              finalContent = finalContent.replace(existingWidgetsMatch[0], sourceWidgets);
+            } else {
+              finalContent = finalContent + '\n\n' + sourceWidgets;
+            }
+          }
+          
+          fs.writeFileSync(yasbConfigPath, finalContent, 'utf8');
+          // Touch file to trigger file watchers
+          fs.utimesSync(yasbConfigPath, new Date(), new Date());
+          needsReload = true;
+        }
+      }
+      
+      // If sub-theme matches, update styles.css with new root variables
+      if (subThemeMatches && sub) {
+        const manifestPath = path.join(yasbThemesDir, theme, 'sub-themes', sub, 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+          console.log('Updating YASB styles.css root variables from', manifestPath);
+          
+          // Read manifest to get updated root variables
+          const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+          let manifest = {};
+          try { manifest = JSON.parse(manifestContent); } catch (e) { }
+          
+          // Build new :root block
+          let rootBlock = ':root {\n';
+          if (manifest['root-variables']) {
+            for (const [key, value] of Object.entries(manifest['root-variables'])) {
+              rootBlock += `  ${key}: ${value};\n`;
+            }
+          }
+          rootBlock += '}';
+          
+          // Read existing styles.css
+          let existingStyles = '';
+          if (fs.existsSync(yasbStylePath)) {
+            existingStyles = fs.readFileSync(yasbStylePath, 'utf8');
+          }
+          
+          // Replace :root block
+          const rootPattern = /:root\s*\{[^}]*\}/s;
+          let newStyles;
+          if (rootPattern.test(existingStyles)) {
+            newStyles = existingStyles.replace(rootPattern, rootBlock);
+          } else {
+            newStyles = rootBlock + '\n\n' + existingStyles;
+          }
+          
+          // Write updated styles
+          fs.writeFileSync(yasbStylePath, newStyles, 'utf8');
+          // Touch file to trigger file watchers
+          fs.utimesSync(yasbStylePath, new Date(), new Date());
+          needsReload = true;
+        }
+      }
+      
+      return { reloaded: needsReload, updatedConfig: majorThemeMatches, updatedStyles: subThemeMatches };
     }
     
     return { reloaded: false };

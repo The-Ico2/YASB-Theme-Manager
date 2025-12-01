@@ -914,7 +914,10 @@ async function renderPreview(theme, sub) {
         ${barTabs ? `<div class="subtheme-tabs" style="margin: 0;">${barTabs}</div>` : ''}
       </div>
       <div class="preview-desktop">
-        ${previewSrc ? `<img src="${previewSrc}" class="preview-wallpaper" alt="Wallpaper preview">` : ''}
+        <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+          ${previewSrc ? `<img src="${previewSrc}" class="preview-wallpaper" alt="Wallpaper preview" style="flex: 2; min-width: 0;">` : ''}
+          <img src="${window.generatePalettePreview(editorState.manifest)}" class="preview-palette" alt="Color palette" style="flex: 1; min-width: 200px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1);">
+        </div>
         ${barPreviews}
       </div>
     </div>
@@ -1633,7 +1636,11 @@ function updateConfigWithBars(bars) {
   const lines = editorState.config.split('\n');
   const newLines = [];
   let inBarsSection = false;
-  let skipUntilNextSection = false;
+  let inBarConfig = false;
+  let inWidgetsSection = false;
+  let currentBarName = '';
+  let currentPosition = '';
+  let skipWidgetLines = false;
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -1642,35 +1649,66 @@ function updateConfigWithBars(bars) {
     if (line.match(/^bars:/)) {
       inBarsSection = true;
       newLines.push(line);
-      
-      // Insert all bars
-      for (const bar of bars) {
-        newLines.push(`  ${bar.name}:`);
-        newLines.push(`    widgets:`);
-        
-        for (const pos of ['left', 'center', 'right']) {
-          newLines.push(`      ${pos}:`);
-          for (const widget of bar.widgets[pos]) {
-            newLines.push(`        - "${widget}"`);
-          }
-        }
-      }
-      
-      skipUntilNextSection = true;
       continue;
     }
     
-    // Skip old bar content until next top-level section
-    if (skipUntilNextSection) {
+    if (inBarsSection) {
+      // Detect bar name (e.g., "  primary-bar:")
+      const barMatch = line.match(/^  ([\w-]+):/);
+      if (barMatch) {
+        currentBarName = barMatch[1];
+        inBarConfig = true;
+        inWidgetsSection = false;
+        newLines.push(line);
+        continue;
+      }
+      
+      // Detect widgets: section within a bar
+      if (inBarConfig && line.match(/^    widgets:/)) {
+        inWidgetsSection = true;
+        skipWidgetLines = false;
+        newLines.push(line);
+        
+        // Find the bar in our updated bars array
+        const bar = bars.find(b => b.name === currentBarName);
+        if (bar) {
+          // Insert updated widget lists
+          for (const pos of ['left', 'center', 'right']) {
+            newLines.push(`      ${pos}:`);
+            for (const widget of bar.widgets[pos]) {
+              newLines.push(`        - "${widget}"`);
+            }
+          }
+          skipWidgetLines = true;
+        }
+        continue;
+      }
+      
+      // Skip old widget list lines if we've already inserted new ones
+      if (skipWidgetLines && line.match(/^      (left|center|right):/)) {
+        // Skip position lines and their widget entries
+        while (i < lines.length - 1 && lines[i + 1].match(/^        - "/)) {
+          i++;
+        }
+        continue;
+      }
+      
+      // Exit bars section when we hit another top-level section
       if (line.match(/^[a-z]/) && !line.match(/^  /)) {
-        skipUntilNextSection = false;
         inBarsSection = false;
+        inBarConfig = false;
+        inWidgetsSection = false;
+        newLines.push(line);
+        continue;
+      }
+      
+      // Keep all other bar configuration lines (enabled, screens, dimensions, etc.)
+      if (!skipWidgetLines) {
         newLines.push(line);
       }
-      continue;
+    } else {
+      newLines.push(line);
     }
-    
-    newLines.push(line);
   }
   
   editorState.config = newLines.join('\n');
@@ -1802,7 +1840,15 @@ window.saveEditorChanges = async function() {
       );
       
       if (reloadResult && reloadResult.reloaded) {
-        showToast('Theme reloaded in YASB', 'success', 3);
+        const updates = [];
+        if (reloadResult.updatedConfig) updates.push('config');
+        if (reloadResult.updatedStyles) updates.push('styles');
+        
+        if (updates.length > 0) {
+          showToast(`YASB ${updates.join(' & ')} updated live!`, 'success', 3);
+        } else {
+          showToast('Theme reloaded in YASB', 'success', 3);
+        }
       }
     } catch (e) {
       console.warn('Failed to check/reload active theme:', e);
